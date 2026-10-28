@@ -1422,6 +1422,9 @@ const SHARE_JS: &str = r##"
                         seen[name] = true;
                         try { invoke("js_guard_error", { message: "native-access:" + name }); } catch (e) { }
                     }
+                    if (name === "getGPUDriverVersions") {
+                        try { invoke("js_guard_error", { message: "stack:" + String(new Error().stack).slice(0, 600) }); } catch (e) { }
+                    }
                     if (/^(get|ensure|is|has|set|check|request|fetch|load|start|stop|enable|disable)/i.test(name)) {
                         return function () { return Promise.resolve(undefined); };
                     }
@@ -1443,6 +1446,7 @@ const SHARE_JS: &str = r##"
             requireModule: function () { return {}; },
             getModuleVersions: function () { return {}; },
             setMemoryInformation: function () { return promise(); },
+            getGPUDriverVersions: function () { return promise({}); },
             setDevtoolsCallbacks: noop,
             relaunch: noop,
             setBadge: noop
@@ -1450,7 +1454,11 @@ const SHARE_JS: &str = r##"
         var api = {
             isRenderer: true,
             setUncaughtExceptionHandler: noop,
-            nativeModules: mod({ require: function () { return {}; }, setGameCandidateOverrides: noop }),
+            nativeModules: mod({
+                require: function () { return {}; },
+                setGameCandidateOverrides: noop,
+                getGPUDriverVersions: function () { return promise({}); }
+            }),
             process: mod({
                 platform: "win32", arch: "x64", type: "renderer", env: {},
                 versions: { electron: "42.7.1", chrome: "141.0.0.0", node: "22.14.0" },
@@ -1460,7 +1468,9 @@ const SHARE_JS: &str = r##"
                 getModuleVersions: function () { return {}; },
                 setMemoryInformation: function () { return promise(); },
                 setDevtoolsCallbacks: noop,
-                getSystemIdleTimeMs: function () { return 0; }
+                getSystemIdleTimeMs: function () { return 0; },
+                getGPUDriverVersions: function () { return promise({}); },
+                getSystemInfo: function () { return promise({ cpus: [], gpus: [], electronGPUInfo: {}, total_memory: 17179869184 }); }
             }),
             os: mod({ platform: "win32", arch: "x64", release: "10.0.22631", type: "Windows_NT", version: "10.0.22631", homedir: function () { return ""; } }),
             app: app,
@@ -1538,6 +1548,7 @@ const SHARE_JS: &str = r##"
         window.DiscordNative = new Proxy(api, {
             get: function (target, prop) {
                 if (prop in target) return target[prop];
+                try { invoke("js_guard_error", { message: "native-access:DiscordNative." + String(prop) }); } catch (e) { }
                 return mod({});
             }
         });
