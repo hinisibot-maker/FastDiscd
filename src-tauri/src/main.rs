@@ -133,6 +133,10 @@ fn main() {
                 .disable_drag_drop_handler()
                 .decorations(false)
                 .initialization_script(TITLEBAR_JS)
+                .initialization_script(&format!(
+                    "window.__FASTDISC_APP_MODE = {:?}; window.__FASTDISC_SCREEN_SHARE = {};",
+                    cfg.app_mode, cfg.screen_share
+                ))
                 .initialization_script(SHARE_JS)
                 .background_color(tauri::utils::config::Color(30, 31, 34, 255))
                 .background_throttling(BackgroundThrottlingPolicy::Suspend)
@@ -1373,11 +1377,25 @@ const SHARE_JS: &str = r##"
         guard((e.reason && e.reason.message) || "rejection");
     });
 
+    if (window.__FASTDISC_APP_MODE === "app") {
+        try { installNativeStub(); } catch (e) { guard(e); }
+    }
+
     function installNativeStub() {
         var noop = function () { };
         var api = {
+            os: {
+                platform: "win32",
+                arch: "x64",
+                release: "10.0.22631",
+                type: "Windows_NT",
+                version: "10.0.22631",
+                getVersion: function () { return "10.0.22631"; }
+            },
             app: {
                 getVersion: function () { return "1.0.9265"; },
+                getBuildNumber: function () { return 9265; },
+                getManifest: function () { return {}; },
                 getReleaseChannel: function () { return "stable"; },
                 getArch: function () { return "x64"; },
                 getPath: function () { return ""; },
@@ -1396,13 +1414,24 @@ const SHARE_JS: &str = r##"
                 chooseScreen: function () { return Promise.resolve("screen:0:0"); },
                 setDesktopCaptureSource: noop
             },
+            safeStorage: {
+                isEncryptionAvailable: function () { return false; },
+                encryptString: function () { return new Uint8Array(0); },
+                decryptString: function () { return ""; }
+            },
             nativeModules: { require: function () { return {}; } },
             features: { get: function () { return false; }, set: noop },
             settings: { get: function () { return {}; }, set: noop }
         };
+        var seen = window.__fastdiscNativeSeen || (window.__fastdiscNativeSeen = {});
         window.DiscordNative = new Proxy(api, {
             get: function (target, prop) {
                 if (prop in target) return target[prop];
+                var name = String(prop);
+                if (!seen[name] && Object.keys(seen).length < 120) {
+                    seen[name] = true;
+                    try { invoke("js_guard_error", { message: "native-access:" + name }); } catch (e) { }
+                }
                 return function () { return undefined; };
             }
         });
@@ -1461,7 +1490,6 @@ const SHARE_JS: &str = r##"
         window.__fastdiscSettings = s;
         if (!s.screenShare) return;
         if (s.appMode === "app") {
-            installNativeStub();
             // 起動失敗（真っ白）を検知したらスタブを外して自動復帰
             setTimeout(function () {
                 var mount = document.getElementById("app-mount");
