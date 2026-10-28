@@ -133,6 +133,7 @@ fn main() {
                 .decorations(false)
                 .initialization_script(TITLEBAR_JS)
                 .initialization_script(SHARE_JS)
+                .background_color(tauri::utils::config::Color(30, 31, 34, 255))
                 .background_throttling(BackgroundThrottlingPolicy::Suspend)
                 .build()?;
 
@@ -433,10 +434,8 @@ fn create_settings_window(app: &AppHandle, prewarm: bool) -> tauri::Result<Webvi
     let handle = window.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            if config().minimize_to_tray {
-                api.prevent_close();
-                let _ = handle.hide();
-            }
+            api.prevent_close();
+            let _ = handle.hide();
         }
     });
 
