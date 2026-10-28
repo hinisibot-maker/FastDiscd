@@ -1,0 +1,43 @@
+﻿_webapp_bundle_compressed_size_bytes=entry.encodedBodySize??null,stats.main_window_webapp_bundle_uncompressed_size_bytes=entry.decodedBodySize??null,stats.main_window_webapp_bundle_transfer_size_bytes=entry.transferSize??null,discord?.getScriptCompilationTimings!=null)){let timing=discord.getScriptCompilationTimings().find(t=>BUNDLE_PATTERN.test(t.url));null!=timing&&(stats.main_window_webapp_bundle_compile_foreground_duration_us=timing.foregroundTimeUs,stats.main_window_webapp_bundle_compile_background_duration_us=timing.backgroundTimeUs,stats.main_window_webapp_bundle_compile_streamed=timing.streamed)}null!=entry&&(discord?.stopScriptCompilationTimings?.(),resourceObserver?.disconnect()),ipcRenderer.send(IPCEvents.APP_MAIN_BUNDLE_STATS,stats)});let app=__webpack_require__(2100),powerMonitor=__webpack_require__(2818),DiscordNative={isRenderer:"renderer"===process.type,setUncaughtExceptionHandler:function(handler){uncaughtExceptionHandler=handler},nativeModules:__webpack_require__(7927),process:__webpack_require__(8434),os:__webpack_require__(3121),app,clipboard:__webpack_require__(6701),ipc:__webpack_require__(8981),gpuSettings:__webpack_require__(4276),window:__webpack_require__(5639),powerMonitor,ntpClock:__webpack_require__(3939),spellCheck:__webpack_require__(9121),crashReporter:__webpack_require__(8986),desktopCapture:__webpack_require__(9425),activityCapture:__webpack_require__(6278),fileManager:__webpack_require__(3466),clips:__webpack_require__(6752),processUtils:__webpack_require__(9141),powerSaveBlocker:__webpack_require__(2853),frameDebugger:__webpack_require__(3269),frameView:__webpack_require__(8563),http:__webpack_require__(723),accessibility:__webpack_require__(7523),features:__webpack_require__(7064),settings:__webpack_require__(6434),userDataCache:__webpack_require__(5984),thumbar:__webpack_require__(8476),safeStorage:__webpack_require__(5261),hardware:__webpack_require__(6955),tracing:__webpack_require__(1793),riotGames:__webpack_require__(4482),cs2Gsi:__webpack_require__(6074),dotaGsi:__webpack_require__(3288),rocketLeagueStatsApi:__webpack_require__(7791),webAuthn:__webpack_require__(3797),gcEvents:__webpack_require__(8408),sysimg:__webpack_require__(7987)},crashReporterSetup=__webpack_require__(2457),sentry=__webpack_require__(9772),browser=__webpack_require__(5768);if(crashReporterSetup&&!crashReporterSetup.isInitialized()){let buildInfo={releaseChannel:app.getReleaseChannel(),version:app.getVersion(),disableUpdater:!1};crashReporterSetup.init(buildInfo,{sentry,getTransport:dsnFunc=>browser.makeMultiplexedTransport(browser.makeFetchTransport,dsnFunc)})}contextBridge.exposeInMainWorld("DiscordNative",DiscordNative),process.once("loaded",()=>{global.DiscordNative=DiscordNative}),process.on("uncaughtException",(err,origin)=>{uncaughtExceptionHandler?.(err,origin)}),window.popouts=new Map}else window.addEventListener("load",_=>{window.opener.popouts.set(window.name,window)}),window.addEventListener("beforeunload",_=>{window.opener.popouts.delete(window.name)})})(),module.exports=__webpack_exports__})();
+!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="157cef19-5658-5509-a557-ba8412dfda4e")}catch(e){}}();
+//# debugId=157cef19-5658-5509-a557-ba8412dfda4e
+{
+    "name": "discord_desktop_core",
+    "license": "UNLICENSED",
+    "description": "Discord Client for Desktop - Core App",
+    "main": "bundle.js",
+    "private": true,
+    "scripts": {
+        "eslint": "eslint . --ext .ts,.tsx --color --quiet",
+        "prettier": "prettier --write .",
+        "tsc": "tsc --pretty",
+        "jest": "jest"
+    },
+    "dependencies": {
+        "@discordapp/desktop-electron-test-rpc-protocol": "file:../../../discord_common/js/packages/desktop-electron-test-rpc-protocol",
+        "@discordapp/desktop-smoketest-common": "file:../../../discord_common/js/packages/desktop-smoketest-common",
+        "@discordapp/discord-native-types": "file:../../../discord_common/js/packages/discord-native-types",
+        "@discordapp/native-crash-codes": "file:../../../discord_common/js/packages/native-crash-codes",
+        "@openpgp/unbzip2-stream": "2.0.0",
+        "@sentry/browser": "10.50.0",
+        "@sentry/electron": "7.13.0",
+        "@sentry/types": "10.50.0",
+        "@types/lodash": "4.14.159",
+        "@types/node": "22.14.0",
+        "arch": "2.2.0",
+        "lodash": "4.17.21",
+        "node-downloader-helper": "^2.1.9",
+        "request": "2.88.0",
+        "yauzl": "^2.10.0"
+    },
+    "devDependencies": {
+        "@types/jest": "28.1.4",
+        "electron": "42.7.1",
+        "jest": "^27.1.0"
+    },
+    "pnpm": {
+        "patchedDependencies": {
+            "@sentry/electron@7.13.0": "patches/@sentry__electron@7.13.0.patch"
+        }
+    }
+}

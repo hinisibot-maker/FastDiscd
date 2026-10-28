@@ -1383,60 +1383,102 @@ const SHARE_JS: &str = r##"
 
     function installNativeStub() {
         var noop = function () { };
+        var promise = function (v) { return Promise.resolve(v); };
+        var anyFn = function () { return undefined; };
+        var anyObj = function () { return new Proxy({}, { get: function () { return anyFn; } }); };
+
+        function mod(extra) {
+            var base = Object.assign({
+                on: noop, off: noop, once: noop, send: noop, invoke: promise, emit: noop,
+                get: anyFn, set: noop, start: noop, stop: noop, isSupported: function () { return false; }
+            }, extra);
+            return new Proxy(base, {
+                get: function (target, prop) {
+                    if (prop in target) return target[prop];
+                    var name = String(prop);
+                    if (!seen[name] && Object.keys(seen).length < 200) {
+                        seen[name] = true;
+                        try { invoke("js_guard_error", { message: "native-access:" + name }); } catch (e) { }
+                    }
+                    return anyFn;
+                }
+            });
+        }
+
+        var seen = window.__fastdiscNativeSeen || (window.__fastdiscNativeSeen = {});
+        var app = mod({
+            getVersion: function () { return "1.0.9266"; },
+            getBuildNumber: function () { return 9266; },
+            getManifest: function () { return {}; },
+            getReleaseChannel: function () { return "stable"; },
+            getArch: function () { return "x64"; },
+            getPath: function () { return ""; },
+            appArch: function () { return "x64"; },
+            requireModule: function () { return {}; },
+            getModuleVersions: function () { return {}; },
+            setMemoryInformation: noop,
+            setDevtoolsCallbacks: noop,
+            relaunch: noop,
+            setBadge: noop
+        });
         var api = {
-            os: {
-                platform: "win32",
-                arch: "x64",
-                release: "10.0.22631",
-                type: "Windows_NT",
-                version: "10.0.22631",
-                getVersion: function () { return "10.0.22631"; }
-            },
-            app: {
-                getVersion: function () { return "1.0.9265"; },
-                getBuildNumber: function () { return 9265; },
-                getManifest: function () { return {}; },
-                getReleaseChannel: function () { return "stable"; },
-                getArch: function () { return "x64"; },
-                getPath: function () { return ""; },
-                relaunch: noop,
-                setBadge: noop
-            },
-            process: { platform: "win32", arch: "x64", env: {}, versions: { electron: "37.6.0", chrome: "141.0.0.0" } },
-            window: {
-                minimize: noop, maximize: noop, restore: noop, close: noop, focus: noop,
-                setZoom: noop, getZoom: function () { return 1; }
-            },
-            desktopCapture: {
-                getSources: function () {
-                    return Promise.resolve([{ id: "screen:0:0", name: "Screen", thumbnail: { toDataURL: function () { return ""; } } }]);
-                },
-                chooseScreen: function () { return Promise.resolve("screen:0:0"); },
-                setDesktopCaptureSource: noop
-            },
-            safeStorage: {
+            isRenderer: true,
+            setUncaughtExceptionHandler: noop,
+            nativeModules: mod({ require: function () { return {}; }, setGameCandidateOverrides: noop }),
+            process: mod({ platform: "win32", arch: "x64", type: "renderer", env: {}, versions: { electron: "42.7.1", chrome: "141.0.0.0", node: "22.14.0" } }),
+            os: mod({ platform: "win32", arch: "x64", release: "10.0.22631", type: "Windows_NT", version: "10.0.22631", homedir: function () { return ""; } }),
+            app: app,
+            clipboard: mod({ copy: noop, read: function () { return ""; } }),
+            ipc: mod({ send: noop, invoke: promise, on: noop, off: noop }),
+            gpuSettings: mod({ getEnableHardwareAcceleration: function () { return true; } }),
+            window: mod({ minimize: noop, maximize: noop, restore: noop, close: noop, focus: noop, setZoom: noop, getZoom: function () { return 1; } }),
+            powerMonitor: mod({ getSystemIdleTime: function () { return 0; }, on: noop }),
+            ntpClock: mod({}),
+            spellCheck: mod({}),
+            crashReporter: mod({}),
+            desktopCapture: mod({
+                getSources: function () { return promise([{ id: "screen:0:0", name: "Screen", thumbnail: { toDataURL: function () { return ""; } } }]); },
+                chooseScreen: function () { return promise("screen:0:0"); }
+            }),
+            activityCapture: mod({}),
+            fileManager: mod({}),
+            clips: mod({}),
+            processUtils: mod({
+                getCPUCoreCount: function () { return 8; },
+                getCurrentCPUUsagePercent: function () { return 0; },
+                getProcessUptime: function () { return 0; },
+                getSystemIdleTimeMs: function () { return 0; },
+                getPreferredSystemLanguages: function () { return ["ja-JP", "en-US"]; },
+                setGameCandidateOverrides: noop
+            }),
+            powerSaveBlocker: mod({ start: function () { return 0; }, stop: noop, isStarted: function () { return false; } }),
+            frameDebugger: mod({}),
+            frameView: mod({}),
+            http: mod({}),
+            accessibility: mod({}),
+            features: mod({ get: function () { return false; }, set: noop }),
+            settings: mod({ get: anyFn, set: noop }),
+            userDataCache: mod({}),
+            thumbar: mod({}),
+            safeStorage: mod({
                 isEncryptionAvailable: function () { return false; },
                 encryptString: function () { return new Uint8Array(0); },
                 decryptString: function () { return ""; }
-            },
-            nativeModules: { require: function () { return {}; } },
-            features: { get: function () { return false; }, set: noop },
-            settings: { get: function () { return {}; }, set: noop }
+            }),
+            hardware: mod({}),
+            tracing: mod({}),
+            riotGames: mod({}),
+            cs2Gsi: mod({}),
+            dotaGsi: mod({}),
+            rocketLeagueStatsApi: mod({}),
+            webAuthn: mod({}),
+            gcEvents: mod({}),
+            sysimg: mod({})
         };
-        var seen = window.__fastdiscNativeSeen || (window.__fastdiscNativeSeen = {});
-        window.DiscordNative = new Proxy(api, {
-            get: function (target, prop) {
-                if (prop in target) return target[prop];
-                var name = String(prop);
-                if (!seen[name] && Object.keys(seen).length < 120) {
-                    seen[name] = true;
-                    try { invoke("js_guard_error", { message: "native-access:" + name }); } catch (e) { }
-                }
-                return function () { return undefined; };
-            }
-        });
-    }
 
+        window.DiscordNative = api;
+        try { window.popouts = new Map(); } catch (e) { }
+    }
     function installCapture() {
         if (window.__fastdiscCapture) return;
         window.__fastdiscCapture = true;
