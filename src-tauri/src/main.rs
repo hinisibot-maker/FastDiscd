@@ -90,6 +90,7 @@ static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 static LAST_PATH: OnceLock<Mutex<String>> = OnceLock::new();
 static DISCORD_LOCALE: OnceLock<Mutex<String>> = OnceLock::new();
 static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn main() {
@@ -136,6 +137,17 @@ fn main() {
                 .background_color(tauri::utils::config::Color(30, 31, 34, 255))
                 .background_throttling(BackgroundThrottlingPolicy::Suspend)
                 .build()?;
+
+            let main_handle = window.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(settings) = main_handle.app_handle().get_webview_window("settings") {
+                        let _ = settings.close();
+                    }
+                    main_handle.app_handle().exit(0);
+                }
+            });
 
             install_webview_hooks(&window);
             apply_zoom(&window, config().zoom);
@@ -434,6 +446,9 @@ fn create_settings_window(app: &AppHandle, prewarm: bool) -> tauri::Result<Webvi
     let handle = window.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
             api.prevent_close();
             let _ = handle.hide();
         }
