@@ -16,7 +16,9 @@
         "core:window:allow-close",
         "core:window:allow-start-dragging",
         "core:window:allow-is-maximized",
-        "allow-window-controls"
+        "allow-window-controls",
+        "allow-screen-share",
+        "core:event:allow-listen"
     ]
 }
 

@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::utils::config::BackgroundThrottlingPolicy;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// Discord の Web クライアント。UI も通信（Gateway / REST）も公式 Web のものをそのまま使う。
 const DISCORD_URL: &str = "https://discord.com/app";
@@ -17,6 +18,10 @@ const DISCORD_URL: &str = "https://discord.com/app";
 /// Discord 公式デスクトップクライアントと同じ UA。
 /// `discord/<version>` を含めることで、Discord 側に「ブラウザ」ではなく
 /// 「デスクトップアプリ」として認識させる（Chrome 偽装はしない）。
+const CHROME_UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
+     Chrome/141.0.0.0 Safari/537.36";
+
 const DISCORD_APP_UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
      discord/1.0.9265 Chrome/141.0.0.0 Electron/37.6.0 Safari/537.36";
@@ -46,6 +51,10 @@ struct Config {
     hardware_acceleration: bool,
     /// UI 言語: "auto" (Discord に合わせる) / "en" / "ja"
     language: String,
+    /// 起動モード: "browser" (推奨) / "app"
+    app_mode: String,
+    /// 画面共有（実験的）
+    screen_share: bool,
 }
 
 impl Default for Config {
@@ -62,6 +71,8 @@ impl Default for Config {
             minimize_to_tray: false,
             hardware_acceleration: true,
             language: "auto".to_string(),
+            app_mode: "browser".to_string(),
+            screen_share: false,
         }
     }
 }
@@ -69,6 +80,7 @@ impl Default for Config {
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 static LAST_PATH: OnceLock<Mutex<String>> = OnceLock::new();
 static DISCORD_LOCALE: OnceLock<Mutex<String>> = OnceLock::new();
+static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn main() {
@@ -87,6 +99,10 @@ fn main() {
             get_autostart,
             set_autostart,
             get_discord_locale,
+            capture_start,
+            capture_stop,
+            js_guard_error,
+            disable_screen_share,
             window_minimize,
             window_toggle_maximize,
             window_close,
@@ -102,10 +118,11 @@ fn main() {
                 .visible(!cfg.start_minimized)
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(720.0, 480.0)
-                .user_agent(DISCORD_APP_UA)
+                .user_agent(if config().app_mode == "app" { DISCORD_APP_UA } else { CHROME_UA })
                 .disable_drag_drop_handler()
                 .decorations(false)
                 .initialization_script(TITLEBAR_JS)
+                .initialization_script(SHARE_JS)
                 .background_throttling(BackgroundThrottlingPolicy::Suspend)
                 .build()?;
 
@@ -950,6 +967,104 @@ fn ptt_loop(window: WebviewWindow) {
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// 画面共有（実験的）: Rust 側で画面をキャプチャして JPEG フレームを JS に送る
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn capture_start(app: AppHandle) -> bool {
+    if CAPTURING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
+    std::thread::spawn(move || capture_loop(app));
+    true
+}
+
+#[tauri::command]
+fn capture_stop() {
+    CAPTURING.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn js_guard_error(message: String) {
+    log(&format!("js guard error: {message}"));
+}
+
+#[tauri::command]
+fn disable_screen_share() {
+    update_config(|c| {
+        c.screen_share = false;
+        true
+    });
+    log("screen share auto-disabled");
+}
+
+fn capture_loop(app: AppHandle) {
+    while CAPTURING.load(std::sync::atomic::Ordering::SeqCst) {
+        if let Some(frame) = grab_screen_jpeg(1280, 720) {
+            let payload = base64::engine::general_purpose::STANDARD.encode(frame);
+            let _ = app.emit("fastdisc://frame", payload);
+        }
+        std::thread::sleep(Duration::from_millis(110));
+    }
+}
+
+#[cfg(windows)]
+fn grab_screen_jpeg(out_w: i32, out_h: i32) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::*;
+
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() {
+            return None;
+        }
+        let width = GetDeviceCaps(Some(screen), HORZRES);
+        let height = GetDeviceCaps(Some(screen), VERTRES);
+
+        let mem = CreateCompatibleDC(Some(screen));
+        let bitmap = CreateCompatibleBitmap(screen, out_w, out_h);
+        let old = SelectObject(mem, bitmap.into());
+        let _ = SetStretchBltMode(mem, HALFTONE);
+        let ok = StretchBlt(mem, 0, 0, out_w, out_h, Some(screen), 0, 0, width, height, SRCCOPY).as_bool();
+
+        let mut pixels = vec![0u8; (out_w * out_h * 4) as usize];
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = out_w;
+        info.bmiHeader.biHeight = -out_h;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB.0;
+
+        let lines = GetDIBits(
+            mem,
+            bitmap,
+            0,
+            out_h as u32,
+            Some(pixels.as_mut_ptr().cast()),
+            &mut info,
+            DIB_RGB_COLORS,
+        );
+
+        let _ = SelectObject(mem, old);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(mem);
+        let _ = ReleaseDC(None, screen);
+
+        if !ok || lines == 0 {
+            return None;
+        }
+
+        let rgb: Vec<u8> = pixels.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0]]).collect();
+        let mut out = Vec::new();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70);
+        encoder
+            .encode(&rgb, out_w as u32, out_h as u32, image::ExtendedColorType::Rgb8)
+            .ok()?;
+        Some(out)
+    }
+}
 // ---------------------------------------------------------------------------
 // 初期設定・ログ
 // ---------------------------------------------------------------------------
@@ -1183,5 +1298,115 @@ const TITLEBAR_JS: &str = r##"
     } else {
         install();
     }
+})();
+"##;
+const SHARE_JS: &str = r##"
+(function () {
+    if (window.top !== window) return;
+    var tauri = window.__TAURI__;
+    if (!tauri || !tauri.core) return;
+    var invoke = tauri.core.invoke;
+
+    var errors = 0;
+    function guard(message) {
+        errors++;
+        try { invoke("js_guard_error", { message: String(message).slice(0, 400) }); } catch (e) { }
+        if (errors >= 3) {
+            try { delete window.DiscordNative; } catch (e) { }
+            try { invoke("disable_screen_share"); } catch (e) { }
+        }
+    }
+    window.addEventListener("error", function (e) { guard(e.message || "error"); });
+    window.addEventListener("unhandledrejection", function (e) {
+        guard((e.reason && e.reason.message) || "rejection");
+    });
+
+    function installNativeStub() {
+        var noop = function () { };
+        var api = {
+            app: {
+                getVersion: function () { return "1.0.9265"; },
+                getReleaseChannel: function () { return "stable"; },
+                getArch: function () { return "x64"; },
+                getPath: function () { return ""; },
+                relaunch: noop,
+                setBadge: noop
+            },
+            process: { platform: "win32", arch: "x64", env: {}, versions: { electron: "37.6.0", chrome: "141.0.0.0" } },
+            window: {
+                minimize: noop, maximize: noop, restore: noop, close: noop, focus: noop,
+                setZoom: noop, getZoom: function () { return 1; }
+            },
+            desktopCapture: {
+                getSources: function () {
+                    return Promise.resolve([{ id: "screen:0:0", name: "Screen", thumbnail: { toDataURL: function () { return ""; } } }]);
+                },
+                chooseScreen: function () { return Promise.resolve("screen:0:0"); },
+                setDesktopCaptureSource: noop
+            },
+            nativeModules: { require: function () { return {}; } },
+            features: { get: function () { return false; }, set: noop },
+            settings: { get: function () { return {}; }, set: noop }
+        };
+        window.DiscordNative = new Proxy(api, {
+            get: function (target, prop) {
+                if (prop in target) return target[prop];
+                return function () { return undefined; };
+            }
+        });
+    }
+
+    function installCapture() {
+        if (window.__fastdiscCapture) return;
+        window.__fastdiscCapture = true;
+
+        var canvas = document.createElement("canvas");
+        canvas.width = 1280;
+        canvas.height = 720;
+        var ctx = canvas.getContext("2d");
+        var listening = false;
+
+        function ensure() {
+            if (listening) return Promise.resolve();
+            listening = true;
+            return tauri.event.listen("fastdisc://frame", function (event) {
+                var img = new Image();
+                img.onload = function () { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
+                img.src = "data:image/jpeg;base64," + event.payload;
+            }).then(function () { return invoke("capture_start"); });
+        }
+
+        var proto = Object.getPrototypeOf(navigator.mediaDevices);
+        try {
+            Object.defineProperty(proto, "getDisplayMedia", {
+                configurable: true,
+                value: function () {
+                    return ensure().then(function () {
+                        var stream = canvas.captureStream(10);
+                        var track = stream.getVideoTracks()[0];
+                        if (track) { try { track.contentHint = "detail"; } catch (e) { } }
+                        return stream;
+                    });
+                }
+            });
+        } catch (e) { guard(e); }
+
+        try {
+            var origQuery = navigator.permissions.query.bind(navigator.permissions);
+            navigator.permissions.query = function (desc) {
+                if (desc && desc.name === "display-capture") {
+                    return Promise.resolve({ state: "granted", onchange: null });
+                }
+                return origQuery(desc);
+            };
+        } catch (e) { }
+    }
+
+    invoke("get_settings").then(function (s) {
+        window.__fastdiscSettings = s;
+        if (!s.screenShare) return;
+        if (s.appMode === "app") installNativeStub();
+        installCapture();
+    }).catch(function () { });
 })();
 "##;

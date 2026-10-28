@@ -34,3 +34,14 @@ commands.allow = [
 ]
 
 
+
+[[permission]]
+identifier = "allow-screen-share"
+description = "画面共有（実験的）用"
+commands.allow = [
+    "get_settings",
+    "capture_start",
+    "capture_stop",
+    "js_guard_error",
+    "disable_screen_share",
+]

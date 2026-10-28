@@ -183,6 +183,12 @@
           "markdownDescription": "Discord の設定画面に埋め込んだ RustCord 設定から使う権限"
         },
         {
+          "description": "画面共有（実験的）用",
+          "type": "string",
+          "const": "allow-screen-share",
+          "markdownDescription": "画面共有（実験的）用"
+        },
+        {
           "description": "設定ウィンドウから設定を読み書きするための権限",
           "type": "string",
           "const": "allow-settings-access",

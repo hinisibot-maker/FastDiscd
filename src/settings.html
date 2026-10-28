@@ -90,6 +90,25 @@
     <div class="group">
         <div class="row">
             <div class="label">
+                <span data-i18n="appMode.label"></span>
+                <div class="hint" data-i18n="appMode.hint"></div>
+            </div>
+            <select id="appMode">
+                <option value="browser" data-i18n="appMode.browser"></option>
+                <option value="app" data-i18n="appMode.app"></option>
+            </select>
+        </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="share.label"></span>
+                <div class="hint" data-i18n="share.hint"></div>
+            </div>
+            <input type="checkbox" id="screenShare" />
+        </div>
+    </div>
+    <div class="group">
+        <div class="row">
+            <div class="label">
                 <span data-i18n="cacheNav.label"></span>
                 <div class="hint" data-i18n="cacheNav.hint"></div>
             </div>
@@ -218,7 +237,13 @@
                 "status.gpuRestart": "GPU setting applies after a restart",
                 "status.pttSet": "PTT key set to ",
                 "status.capture": "Press a key... (Esc to cancel)",
-                "ptt.none": "Not set"
+                "ptt.none": "Not set",
+                "appMode.label": "Startup mode",
+                "appMode.hint": "Browser mode is recommended for stability. App mode may break screen sharing.",
+                "appMode.browser": "Browser (recommended)",
+                "appMode.app": "App (experimental)",
+                "share.label": "Screen sharing (experimental)",
+                "share.hint": "Uses a custom capture pipeline. May be unstable, especially in app mode."
             },
             ja: {
                 "title": "FastDiscd 設定",
@@ -255,7 +280,13 @@
                 "status.gpuRestart": "GPU 設定は再起動後に反映されます",
                 "status.pttSet": "PTT キーを設定しました: ",
                 "status.capture": "キーを押してください…（Escで解除）",
-                "ptt.none": "未設定"
+                "ptt.none": "未設定",
+                "appMode.label": "起動モード",
+                "appMode.hint": "安定動作のためブラウザモードを推奨します。アプリモードは画面共有が不安定になります。",
+                "appMode.browser": "ブラウザ（推奨）",
+                "appMode.app": "アプリ（実験的）",
+                "share.label": "画面共有（実験的）",
+                "share.hint": "独自キャプチャで配信します。不安定な場合があります（特にアプリモード）。"
             }
         };
 
@@ -297,6 +328,8 @@
             for (const key of fields) $(key).checked = !!s[key];
             $("zoom").value = s.zoom;
             $("language").value = s.language || "auto";
+            $("appMode").value = s.appMode || "browser";
+            $("screenShare").checked = !!s.screenShare;
             pttCode = s.pushToTalkCode || "";
             updateZoomLabel();
             applyLanguage();
@@ -313,7 +346,9 @@
                 hardwareAcceleration: $("hardwareAcceleration").checked,
                 zoom: Number($("zoom").value),
                 pushToTalkCode: pttCode,
-                language: $("language").value
+                language: $("language").value,
+                appMode: $("appMode").value,
+                screenShare: $("screenShare").checked
             };
         }
 
@@ -341,6 +376,9 @@
             applyLanguage();
             save();
         });
+
+        $("appMode").addEventListener("change", save);
+        $("screenShare").addEventListener("change", save);
 
         $("clearNow").addEventListener("click", async () => {
             await invoke("clear_cache_now");
