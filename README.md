@@ -31,11 +31,12 @@ A lightweight desktop client for Discord, built with **Rust + Windows' built-in 
 | Voice chat | ✅ Works | WebRTC; microphone permission auto-granted; Discord's voice settings apply |
 | Notifications | ✅ Works | Windows toast notifications via WebView2 (permission auto-granted) |
 | Push-to-talk | ✅ Enhanced | **Works globally** — talking works even when another window is focused (key polling in Rust) |
-| Screen sharing | ❌ Not supported | Limitation of WebView2 (no `getDisplayMedia` picker UI) |
+| Screen sharing | △ Partial | WebView2 `ScreenCaptureStarting` hook auto-approves capture (source picker is limited) |
 | Global hotkeys (mute, etc.) | △ Partial | PTT only; other actions planned |
 | Zoom level | ✅ Custom | Discord's web app has no zoom setting, so FastDiscd provides its own |
 | Startup behavior / tray | ✅ Full | Launch at login, start minimized, minimize to tray, GPU toggle |
 | Rich Presence / game detection | ❌ Not supported | Requires `DiscordNative` |
+| Drag & drop files into chat | ✅ Works | WebView2 native file drop is enabled |
 | Auto-update | — | Discord's web app is always current; the app itself is updated manually |
 
 ---
@@ -118,12 +119,15 @@ The Electron client bundles Chromium and Node.js with every app. FastDiscd inste
 
 Log in to Discord on first launch. You will stay logged in afterwards.
 
+The installer asks you to choose English or Japanese.
+
 ## Settings
 
 **Right-click the FastDiscd icon in the system tray → "Settings..."** (left-click restores the main window).
 
 | Option | Description |
 |---|---|
+| Language | Auto (match Discord) / English / Japanese. Unsupported languages fall back to English |
 | Clear cache on page load | Drops the HTTP cache whenever a page loads |
 | Clear previous page cache on channel switch | Discards the old channel's cache (and runs GC) |
 | Free memory when minimized | Puts WebView2 into a low-memory state while minimized |
@@ -161,7 +165,7 @@ pnpm tauri build
 
 ## Known limitations
 
-- Screen sharing is not possible due to WebView2 limitations
+- Screen sharing is partially supported (capture source selection is limited by WebView2)
 - Some Discord settings (anything `DiscordNative`-dependent) do not exist on the web, so FastDiscd provides its own substitutes
 - The icons of WebView2 child processes in Task Manager belong to the Edge/WebView2 runtime and cannot be changed
 

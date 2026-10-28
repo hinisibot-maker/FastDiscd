@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>FastDiscd 設定</title>
+    <title>FastDiscd Settings</title>
     <style>
         :root {
             color-scheme: dark;
@@ -28,23 +28,11 @@
             user-select: none;
         }
 
-        h1 {
-            font-size: 18px;
-            margin: 0 0 4px;
-        }
+        h1 { font-size: 18px; margin: 0 0 4px; }
 
-        .sub {
-            color: var(--muted);
-            font-size: 12px;
-            margin-bottom: 18px;
-        }
+        .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
 
-        .group {
-            background: var(--card);
-            border-radius: 10px;
-            padding: 6px 14px;
-            margin-bottom: 12px;
-        }
+        .group { background: var(--card); border-radius: 10px; padding: 6px 14px; margin-bottom: 12px; }
 
         .row {
             display: flex;
@@ -55,90 +43,62 @@
         }
 
         .row:last-child { border-bottom: none; }
-
         .row .label { flex: 1; }
+        .row .hint { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
 
-        .row .hint {
-            color: var(--muted);
-            font-size: 11.5px;
-            margin-top: 2px;
+        input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+        input[type="range"] { flex: 0 0 150px; accent-color: var(--accent); }
+        select {
+            background: #1e1f22; color: var(--text); border: 1px solid var(--line);
+            border-radius: 6px; padding: 6px 8px; font-size: 13px;
         }
 
-        input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            accent-color: var(--accent);
-            margin: 0;
-        }
+        .value { width: 46px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 
-        input[type="range"] {
-            flex: 0 0 150px;
-            accent-color: var(--accent);
-        }
-
-        .value {
-            width: 46px;
-            text-align: right;
-            color: var(--muted);
-            font-variant-numeric: tabular-nums;
-        }
-
-        .actions {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-            margin-top: 16px;
-        }
+        .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
 
         button {
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            border-radius: 8px;
-            padding: 9px 16px;
-            font-size: 13.5px;
-            cursor: pointer;
+            background: var(--accent); color: #fff; border: none; border-radius: 8px;
+            padding: 9px 16px; font-size: 13.5px; cursor: pointer;
         }
 
-        button.secondary {
-            background: #4e5058;
-        }
-
+        button.secondary { background: #4e5058; }
         button:hover { filter: brightness(1.1); }
 
-        .status {
-            color: var(--muted);
-            font-size: 12px;
-            margin-top: 10px;
-            min-height: 16px;
-        }
+        .status { color: var(--muted); font-size: 12px; margin-top: 10px; min-height: 16px; }
     </style>
-    <script>
-        window.addEventListener("error", function (e) {
-            document.title = "ERR: " + (e.message || "unknown");
-        });
-        window.addEventListener("unhandledrejection", function (e) {
-            document.title = "REJ: " + (e.reason && e.reason.message ? e.reason.message : e.reason);
-        });
-    </script>
 </head>
 
 <body>
-    <h1>FastDiscd 設定</h1>
-    <div class="sub">設定は即時反映され、自動的に保存されます。</div>
+    <h1 data-i18n="title">FastDiscd Settings</h1>
+    <div class="sub" data-i18n="subtitle"></div>
 
     <div class="group">
         <div class="row">
             <div class="label">
-                ページ読み込み時にキャッシュを削除
-                <div class="hint">ログイン画面→アプリなど、ページ遷移時に HTTP キャッシュを破棄します</div>
+                <span data-i18n="language.label"></span>
+                <div class="hint" data-i18n="language.hint"></div>
+            </div>
+            <select id="language">
+                <option value="auto" data-i18n="language.auto"></option>
+                <option value="ja">日本語</option>
+                <option value="en">English</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="row">
+            <div class="label">
+                <span data-i18n="cacheNav.label"></span>
+                <div class="hint" data-i18n="cacheNav.hint"></div>
             </div>
             <input type="checkbox" id="clearCacheOnNavigation" />
         </div>
         <div class="row">
             <div class="label">
-                チャンネル切替時に前ページのキャッシュを削除
-                <div class="hint">チャンネルを切り替えたとき、以前のページの画像・GIF キャッシュを破棄します</div>
+                <span data-i18n="cacheChannel.label"></span>
+                <div class="hint" data-i18n="cacheChannel.hint"></div>
             </div>
             <input type="checkbox" id="clearCacheOnChannelChange" />
         </div>
@@ -147,15 +107,15 @@
     <div class="group">
         <div class="row">
             <div class="label">
-                最小化時にメモリを解放
-                <div class="hint">最小化中は WebView2 を省メモリ状態にします（通知は止まりません）</div>
+                <span data-i18n="minimizeMem.label"></span>
+                <div class="hint" data-i18n="minimizeMem.hint"></div>
             </div>
             <input type="checkbox" id="suspendOnMinimize" />
         </div>
         <div class="row">
             <div class="label">
-                非フォーカス時にメモリ目標を Low にする
-                <div class="hint">他のウィンドウを操作している間、WebView2 に省メモリ動作を指示します</div>
+                <span data-i18n="lowMem.label"></span>
+                <div class="hint" data-i18n="lowMem.hint"></div>
             </div>
             <input type="checkbox" id="lowMemoryOnBlur" />
         </div>
@@ -164,39 +124,39 @@
     <div class="group">
         <div class="row">
             <div class="label">
-                プッシュトゥトーク（グローバル）
-                <div class="hint">Discord の PTT キーと同じキーを設定してください。別ウィンドウを見ていても反応します</div>
+                <span data-i18n="ptt.label"></span>
+                <div class="hint" data-i18n="ptt.hint"></div>
             </div>
-            <button class="secondary" id="pttButton">未設定</button>
+            <button class="secondary" id="pttButton">—</button>
         </div>
     </div>
 
     <div class="group">
         <div class="row">
             <div class="label">
-                Windows 起動時に自動で開く
-                <div class="hint">HKCU の Run に登録します（管理者権限不要）</div>
+                <span data-i18n="autostart.label"></span>
+                <div class="hint" data-i18n="autostart.hint"></div>
             </div>
             <input type="checkbox" id="startWithWindows" />
         </div>
         <div class="row">
             <div class="label">
-                起動時は最小化して開始
-                <div class="hint">次回起動から反映されます</div>
+                <span data-i18n="startMin.label"></span>
+                <div class="hint" data-i18n="startMin.hint"></div>
             </div>
             <input type="checkbox" id="startMinimized" />
         </div>
         <div class="row">
             <div class="label">
-                最小化時にタスクトレイへ格納
-                <div class="hint">タスクトレイのアイコンを左クリックで戻ります</div>
+                <span data-i18n="tray.label"></span>
+                <div class="hint" data-i18n="tray.hint"></div>
             </div>
             <input type="checkbox" id="minimizeToTray" />
         </div>
         <div class="row">
             <div class="label">
-                ハードウェアアクセラレーション（GPU）
-                <div class="hint">オフにすると GPU を使わずに描画します（再起動後に反映）</div>
+                <span data-i18n="gpu.label"></span>
+                <div class="hint" data-i18n="gpu.hint"></div>
             </div>
             <input type="checkbox" id="hardwareAcceleration" />
         </div>
@@ -205,8 +165,8 @@
     <div class="group">
         <div class="row">
             <div class="label">
-                拡大率
-                <div class="hint">Discord の設定に拡大率が表示されない環境向けの代替設定です</div>
+                <span data-i18n="zoom.label"></span>
+                <div class="hint" data-i18n="zoom.hint"></div>
             </div>
             <input type="range" id="zoom" min="0.5" max="2" step="0.1" />
             <span class="value" id="zoomValue">100%</span>
@@ -214,42 +174,132 @@
     </div>
 
     <div class="actions">
-        <button class="secondary" id="clearNow">キャッシュを今すぐ削除</button>
-        <button id="close">閉じる</button>
+        <button class="secondary" id="clearNow" data-i18n="clearNow"></button>
+        <button id="close" data-i18n="close"></button>
     </div>
     <div class="status" id="status"></div>
 
     <script>
         const { invoke } = window.__TAURI__.core;
 
+        const I18N = {
+            en: {
+                "title": "FastDiscd Settings",
+                "subtitle": "Changes are applied immediately and saved automatically.",
+                "language.label": "Language",
+                "language.hint": "Auto follows Discord's language (falls back to English).",
+                "language.auto": "Auto (match Discord)",
+                "cacheNav.label": "Clear cache on page load",
+                "cacheNav.hint": "Drops the HTTP cache whenever a page loads.",
+                "cacheChannel.label": "Clear previous page cache on channel switch",
+                "cacheChannel.hint": "Discards the old channel's images/GIF cache when switching channels.",
+                "minimizeMem.label": "Free memory when minimized",
+                "minimizeMem.hint": "Puts WebView2 into a low-memory state while minimized (notifications keep working).",
+                "lowMem.label": "Low memory target when unfocused",
+                "lowMem.hint": "Asks WebView2 to run in low-memory mode while another window is active.",
+                "ptt.label": "Push-to-talk (global)",
+                "ptt.hint": "Set the same key as Discord. Works even when another window is focused.",
+                "autostart.label": "Launch at Windows startup",
+                "autostart.hint": "Adds an HKCU Run entry (no admin required).",
+                "startMin.label": "Start minimized",
+                "startMin.hint": "Takes effect on the next launch.",
+                "tray.label": "Minimize to tray",
+                "tray.hint": "Left-click the tray icon to restore.",
+                "gpu.label": "Hardware acceleration (GPU)",
+                "gpu.hint": "Disabling takes effect after a restart.",
+                "zoom.label": "Zoom",
+                "zoom.hint": "Substitute for Discord's zoom setting, which the web app does not expose.",
+                "clearNow": "Clear cache now",
+                "close": "Close",
+                "status.saved": "Saved",
+                "status.saveError": "Failed to save: ",
+                "status.loadError": "Failed to load settings: ",
+                "status.cacheCleared": "Cache cleared",
+                "status.gpuRestart": "GPU setting applies after a restart",
+                "status.pttSet": "PTT key set to ",
+                "status.capture": "Press a key... (Esc to cancel)",
+                "ptt.none": "Not set"
+            },
+            ja: {
+                "title": "FastDiscd 設定",
+                "subtitle": "設定は即時反映され、自動的に保存されます。",
+                "language.label": "言語",
+                "language.hint": "「Discordに合わせる」はDiscordの言語に追従します（非対応言語は英語）。",
+                "language.auto": "Discordに合わせる",
+                "cacheNav.label": "ページ読み込み時にキャッシュを削除",
+                "cacheNav.hint": "ページ遷移時に HTTP キャッシュを破棄します。",
+                "cacheChannel.label": "チャンネル切替時に前ページのキャッシュを削除",
+                "cacheChannel.hint": "チャンネル切替時に旧ページの画像・GIFキャッシュを破棄します。",
+                "minimizeMem.label": "最小化時にメモリを解放",
+                "minimizeMem.hint": "最小化中は WebView2 を省メモリ状態にします（通知は止まりません）。",
+                "lowMem.label": "非フォーカス時にメモリ目標を Low にする",
+                "lowMem.hint": "他のウィンドウを操作している間、WebView2 に省メモリ動作を指示します。",
+                "ptt.label": "プッシュトゥトーク（グローバル）",
+                "ptt.hint": "Discord の PTT キーと同じキーを設定してください。別ウィンドウでも反応します。",
+                "autostart.label": "Windows 起動時に自動で開く",
+                "autostart.hint": "HKCU の Run に登録します（管理者権限不要）。",
+                "startMin.label": "起動時は最小化して開始",
+                "startMin.hint": "次回起動から反映されます。",
+                "tray.label": "最小化時にタスクトレイへ格納",
+                "tray.hint": "トレイアイコンの左クリックで戻ります。",
+                "gpu.label": "ハードウェアアクセラレーション（GPU）",
+                "gpu.hint": "オフは再起動後に反映されます。",
+                "zoom.label": "拡大率",
+                "zoom.hint": "Discord Web に拡大率設定が無いための代替です。",
+                "clearNow": "キャッシュを今すぐ削除",
+                "close": "閉じる",
+                "status.saved": "保存しました",
+                "status.saveError": "保存に失敗: ",
+                "status.loadError": "設定の読み込みに失敗: ",
+                "status.cacheCleared": "キャッシュを削除しました",
+                "status.gpuRestart": "GPU 設定は再起動後に反映されます",
+                "status.pttSet": "PTT キーを設定しました: ",
+                "status.capture": "キーを押してください…（Escで解除）",
+                "ptt.none": "未設定"
+            }
+        };
+
         const fields = ["clearCacheOnNavigation", "clearCacheOnChannelChange", "suspendOnMinimize", "lowMemoryOnBlur", "startMinimized", "minimizeToTray", "hardwareAcceleration"];
         const $ = id => document.getElementById(id);
 
-        let state = null;
+        let settings = null;
+        let lang = "en";
         let ready = false;
         let pttCode = "";
         let capturing = false;
 
-        function pttLabel(code) {
-            if (!code) return "未設定";
-            if (code.startsWith("Key")) return code.slice(3);
-            if (code.startsWith("Digit")) return code.slice(5);
-            return code;
-        }
+        const t = key => (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
 
-        function render(settings) {
-            state = settings;
-            for (const key of fields) $(key).checked = !!settings[key];
-            $("zoom").value = settings.zoom;
-            pttCode = settings.pushToTalkCode || "";
-            $("pttButton").textContent = pttLabel(pttCode);
-            updateZoomLabel();
-            document.title = "FastDiscd 設定 — " + Math.round(settings.zoom * 100) + "%";
-            invoke("debug_log", { message: JSON.stringify(settings) });
+        function applyLanguage() {
+            for (const el of document.querySelectorAll("[data-i18n]")) {
+                el.textContent = t(el.getAttribute("data-i18n"));
+            }
+            $("pttButton").textContent = pttCode ? pttCode.replace("Key", "") : t("ptt.none");
+            document.title = t("title");
         }
 
         function updateZoomLabel() {
             $("zoomValue").textContent = Math.round(Number($("zoom").value) * 100) + "%";
+        }
+
+        async function resolveLanguage(preferred) {
+            if (preferred === "ja" || preferred === "en") return preferred;
+            try {
+                const discord = await invoke("get_discord_locale");
+                if (discord && discord.startsWith("ja")) return "ja";
+                if (discord) return "en";
+            } catch (e) { }
+            return (navigator.language || "en").startsWith("ja") ? "ja" : "en";
+        }
+
+        function render(s) {
+            settings = s;
+            for (const key of fields) $(key).checked = !!s[key];
+            $("zoom").value = s.zoom;
+            $("language").value = s.language || "auto";
+            pttCode = s.pushToTalkCode || "";
+            updateZoomLabel();
+            applyLanguage();
         }
 
         function collect() {
@@ -258,11 +308,12 @@
                 clearCacheOnChannelChange: $("clearCacheOnChannelChange").checked,
                 suspendOnMinimize: $("suspendOnMinimize").checked,
                 lowMemoryOnBlur: $("lowMemoryOnBlur").checked,
-                zoom: Number($("zoom").value),
-                pushToTalkCode: pttCode,
                 startMinimized: $("startMinimized").checked,
                 minimizeToTray: $("minimizeToTray").checked,
-                hardwareAcceleration: $("hardwareAcceleration").checked
+                hardwareAcceleration: $("hardwareAcceleration").checked,
+                zoom: Number($("zoom").value),
+                pushToTalkCode: pttCode,
+                language: $("language").value
             };
         }
 
@@ -271,13 +322,13 @@
             if (!ready) return;
             clearTimeout(saveTimer);
             saveTimer = setTimeout(async () => {
-                const settings = collect();
+                const payload = collect();
                 try {
-                    await invoke("save_settings", { settings });
-                    $("status").textContent = "保存しました";
+                    await invoke("save_settings", { settings: payload });
+                    $("status").textContent = t("status.saved");
                     setTimeout(() => ($("status").textContent = ""), 1500);
                 } catch (e) {
-                    $("status").textContent = "保存に失敗: " + e;
+                    $("status").textContent = t("status.saveError") + e;
                 }
             }, 150);
         }
@@ -285,27 +336,23 @@
         for (const key of fields) $(key).addEventListener("change", save);
         $("zoom").addEventListener("input", () => { updateZoomLabel(); save(); });
 
+        $("language").addEventListener("change", async () => {
+            lang = await resolveLanguage($("language").value);
+            applyLanguage();
+            save();
+        });
+
         $("clearNow").addEventListener("click", async () => {
             await invoke("clear_cache_now");
-            $("status").textContent = "キャッシュを削除しました";
+            $("status").textContent = t("status.cacheCleared");
             setTimeout(() => ($("status").textContent = ""), 1500);
         });
 
         $("close").addEventListener("click", () => invoke("close_settings"));
 
-        $("startWithWindows").addEventListener("change", async () => {
-            await invoke("set_autostart", { enabled: $("startWithWindows").checked });
-        });
-        invoke("get_autostart").then(v => { $("startWithWindows").checked = !!v; }).catch(() => { });
-
-        $("hardwareAcceleration").addEventListener("change", () => {
-            $("status").textContent = "GPU 設定は再起動後に反映されます";
-        });
-
         $("pttButton").addEventListener("click", () => {
             capturing = true;
-            $("pttButton").textContent = "キーを押してください…";
-            $("status").textContent = "Esc で解除";
+            $("pttButton").textContent = t("status.capture");
         });
 
         window.addEventListener("keydown", e => {
@@ -314,18 +361,30 @@
             e.stopPropagation();
             capturing = false;
             if (e.code === "Escape") {
-                $("pttButton").textContent = pttLabel(pttCode);
-                $("status").textContent = "";
+                $("pttButton").textContent = pttCode ? pttCode.replace("Key", "") : t("ptt.none");
                 return;
             }
             pttCode = e.code;
-            $("pttButton").textContent = pttLabel(pttCode);
-            $("status").textContent = "PTT キーを " + pttLabel(pttCode) + " に設定しました";
+            $("pttButton").textContent = pttCode.replace("Key", "");
             save();
         }, true);
 
-        invoke("get_settings").then(s => { render(s); ready = true; }).catch(e => {
-            $("status").textContent = "設定の読み込みに失敗: " + e;
+        $("hardwareAcceleration").addEventListener("change", () => {
+            $("status").textContent = t("status.gpuRestart");
+        });
+
+        invoke("get_autostart").then(v => { $("startWithWindows").checked = !!v; }).catch(() => { });
+        $("startWithWindows").addEventListener("change", async () => {
+            await invoke("set_autostart", { enabled: $("startWithWindows").checked });
+        });
+
+        invoke("get_settings").then(async s => {
+            render(s);
+            lang = await resolveLanguage(s.language || "auto");
+            applyLanguage();
+            ready = true;
+        }).catch(e => {
+            $("status").textContent = t("status.loadError") + e;
         });
     </script>
 </body>

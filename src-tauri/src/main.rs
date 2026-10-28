@@ -44,6 +44,8 @@ struct Config {
     minimize_to_tray: bool,
     /// ハードウェアアクセラレーション（GPU）を使う
     hardware_acceleration: bool,
+    /// UI 言語: "auto" (Discord に合わせる) / "en" / "ja"
+    language: String,
 }
 
 impl Default for Config {
@@ -59,12 +61,15 @@ impl Default for Config {
             start_minimized: false,
             minimize_to_tray: false,
             hardware_acceleration: true,
+            language: "auto".to_string(),
         }
     }
 }
 
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 static LAST_PATH: OnceLock<Mutex<String>> = OnceLock::new();
+static DISCORD_LOCALE: OnceLock<Mutex<String>> = OnceLock::new();
+static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn main() {
     migrate_legacy_data();
@@ -81,6 +86,7 @@ fn main() {
             open_settings_window,
             get_autostart,
             set_autostart,
+            get_discord_locale,
             window_minimize,
             window_toggle_maximize,
             window_close,
@@ -97,6 +103,7 @@ fn main() {
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(720.0, 480.0)
                 .user_agent(DISCORD_APP_UA)
+                .disable_drag_drop_handler()
                 .decorations(false)
                 .initialization_script(TITLEBAR_JS)
                 .background_throttling(BackgroundThrottlingPolicy::Suspend)
@@ -106,8 +113,8 @@ fn main() {
             apply_zoom(&window, config().zoom);
             build_tray(app)?;
 
-            // 設定ウィンドウを事前に生成しておき、トレイから即座に開けるようにする
-            if let Err(e) = create_settings_window(app.handle(), false) {
+            // 設定ウィンドウを非表示で事前生成（初回表示を速くする）
+            if let Err(e) = create_settings_window(app.handle(), true) {
                 log(&format!("prewarm settings window failed: {e}"));
             }
 
@@ -188,6 +195,7 @@ fn init_config() {
 
     let _ = CONFIG.set(Mutex::new(config));
     let _ = LAST_PATH.set(Mutex::new(String::new()));
+    let _ = DISCORD_LOCALE.set(Mutex::new(String::new()));
 }
 fn config() -> Config {
     CONFIG
@@ -236,7 +244,10 @@ fn save_settings(app: AppHandle, settings: Config) {
     if let Some(window) = app.get_webview_window("main") {
         apply_zoom(&window, zoom);
     }
-    log(&format!("settings saved: zoom={zoom}"));
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.set_title(settings_title());
+    }
+    log(&format!("settings saved: zoom={zoom} lang={}", config().language));
 }
 
 #[tauri::command]
@@ -352,29 +363,67 @@ fn set_autostart(enabled: bool) -> bool {
 
     matches!(status, Ok(s) if s.success())
 }
+
+#[tauri::command]
+fn get_discord_locale() -> String {
+    DISCORD_LOCALE
+        .get()
+        .and_then(|m| m.lock().ok().map(|g| g.clone()))
+        .unwrap_or_default()
+}
 fn open_settings(app: &AppHandle) {
+    SETTINGS_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.center();
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
         return;
     }
 
-    if let Err(e) = create_settings_window(app, true) {
+    if let Err(e) = create_settings_window(app, false) {
         log(&format!("failed to open settings window: {e}"));
     }
 }
 
-fn create_settings_window(app: &AppHandle, visible: bool) -> tauri::Result<WebviewWindow> {
+fn create_settings_window(app: &AppHandle, prewarm: bool) -> tauri::Result<WebviewWindow> {
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
-        .title("FastDiscd 設定")
+        .title(settings_title())
         .inner_size(580.0, 660.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
-        .visible(visible)
+        .visible(!prewarm)
+        .background_throttling(BackgroundThrottlingPolicy::Disabled)
         .center()
         .build()
+}
+
+fn settings_title() -> &'static str {
+    if ui_lang() == "ja" { "FastDiscd 設定" } else { "FastDiscd Settings" }
+}
+
+fn ui_lang() -> &'static str {
+    match config().language.as_str() {
+        "ja" => "ja",
+        "en" => "en",
+        _ => {
+            let discord = DISCORD_LOCALE
+                .get()
+                .and_then(|m| m.lock().ok().map(|g| g.clone()))
+                .unwrap_or_default();
+            if discord.to_ascii_lowercase().starts_with("ja") {
+                "ja"
+            } else if !discord.is_empty() {
+                "en"
+            } else {
+                unsafe {
+                    let langid = GetUserDefaultUILanguage();
+                    if (langid & 0x3ff) == 0x11 { "ja" } else { "en" }
+                }
+            }
+        }
+    }
 }
 
 fn clear_cache_for(app: &AppHandle) {
@@ -394,10 +443,11 @@ fn clear_cache_for(app: &AppHandle) {
 // ---------------------------------------------------------------------------
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
-    let settings_item = MenuItem::with_id(app, "settings", "設定...", true, None::<&str>)?;
+    let ja = ui_lang() == "ja";
+    let settings_item = MenuItem::with_id(app, "settings", if ja { "設定..." } else { "Settings..." }, true, None::<&str>)?;
     let clear_item =
-        MenuItem::with_id(app, "clear_now", "キャッシュを今すぐ削除", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "終了", true, None::<&str>)?;
+        MenuItem::with_id(app, "clear_now", if ja { "キャッシュを今すぐ削除" } else { "Clear cache now" }, true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", if ja { "終了" } else { "Quit" }, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
 
     let items: [&dyn tauri::menu::IsMenuItem<tauri::Wry>; 4] =
@@ -489,7 +539,27 @@ fn install_webview_hooks(window: &WebviewWindow) {
             }
         }
         std::mem::forget(navigation);
-    });
+
+        // 画面共有（配信）を許可する
+        if let Ok(core27) = core.cast::<ICoreWebView2_27>() {
+            let screen = ScreenCaptureStartingEventHandler::create(Box::new(|_sender, args| {
+                if let Some(args) = args {
+                    unsafe {
+                        let _ = args.SetHandled(true);
+                        let _ = args.SetCancel(false);
+                    }
+                }
+                Ok(())
+            }));
+            let mut screen_token = 0i64;
+            unsafe {
+                match core27.add_ScreenCaptureStarting(&screen, &mut screen_token) {
+                    Ok(()) => log("screen capture hook registered"),
+                    Err(e) => log(&format!("add_ScreenCaptureStarting failed: {e}")),
+                }
+            }
+            std::mem::forget(screen);
+        }    });
 
     if let Err(e) = result {
         log(&format!("with_webview failed: {e}"));
@@ -554,6 +624,10 @@ fn supervisor(window: WebviewWindow) {
 
         maybe_run_command(&window);
 
+        if tick % 10 == 0 && !suspended {
+            poll_locale(&window);
+        }
+
         // 表示中のみ、チャンネル（SPA ルート）の変化を監視してキャッシュを破棄する
         // 最小化時にトレイへ格納
         if cfg.minimize_to_tray && minimized && window.is_visible().unwrap_or(false) {
@@ -589,6 +663,36 @@ fn maybe_run_command(window: &WebviewWindow) {
         }));
         unsafe {
             let _ = core.ExecuteScript(&js, &handler);
+        }
+    });
+}
+
+/// Discord の表示言語を取得して保持する（「Discordに合わせる」用）。
+fn poll_locale(window: &WebviewWindow) {
+    let _ = window.with_webview(|webview| {
+        let controller = webview.controller();
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else {
+            return;
+        };
+
+        let script = HSTRING::from("[document.documentElement.lang, navigator.language].filter(Boolean).join('|')");
+        let handler = ExecuteScriptCompletedHandler::create(Box::new(|hr, result| {
+            if hr.is_err() {
+                return Ok(());
+            }
+            let value = result.trim_matches('"').to_string();
+            let first = value.split('|').next().unwrap_or("").to_string();
+            if !first.is_empty() {
+                if let Some(store) = DISCORD_LOCALE.get() {
+                    if let Ok(mut guard) = store.lock() {
+                        *guard = first;
+                    }
+                }
+            }
+            Ok(())
+        }));
+        unsafe {
+            let _ = core.ExecuteScript(&script, &handler);
         }
     });
 }
@@ -876,15 +980,18 @@ fn log(message: &str) {
 }
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2, ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_19, ICoreWebView2_3,
+    ICoreWebView2, ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_19, ICoreWebView2_27,
+    ICoreWebView2_3,
     COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
 };
 use webview2_com::{
     CallDevToolsProtocolMethodCompletedHandler, ClearBrowsingDataCompletedHandler, ExecuteScriptCompletedHandler,
-    NavigationCompletedEventHandler, PermissionRequestedEventHandler, TrySuspendCompletedHandler,
+    NavigationCompletedEventHandler, PermissionRequestedEventHandler, ScreenCaptureStartingEventHandler,
+    TrySuspendCompletedHandler,
 };
 use windows::core::{HSTRING, Interface};
+use windows::Win32::Globalization::GetUserDefaultUILanguage;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,

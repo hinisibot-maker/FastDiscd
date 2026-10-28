@@ -29,6 +29,7 @@
         "windows": {
             "nsis": {
                 "installMode": "perMachine",
+                "displayLanguageSelector": true,
                 "installerIcon": "icons/icon.ico",
                 "languages": [
                     "Japanese",
