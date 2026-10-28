@@ -31,7 +31,7 @@ A lightweight desktop client for Discord, built with **Rust + Windows' built-in 
 | Voice chat | ✅ Works | WebRTC; microphone permission auto-granted; Discord's voice settings apply |
 | Notifications | ✅ Works | Windows toast notifications via WebView2 (permission auto-granted) |
 | Push-to-talk | ✅ Enhanced | **Works globally** — talking works even when another window is focused (key polling in Rust) |
-| Screen sharing | △ Experimental | Custom capture pipeline. Unstable or non-functional in app mode |
+| Screen sharing | △ Experimental | Custom capture pipeline (whole screen, ~9 fps, no audio) |
 | Global hotkeys (mute, etc.) | △ Partial | PTT only; other actions planned |
 | Zoom level | ✅ Custom | Discord's web app has no zoom setting, so FastDiscd provides its own |
 | Startup behavior / tray | ✅ Full | Launch at login, start minimized, minimize to tray, GPU toggle |
@@ -118,15 +118,7 @@ Log in to Discord on first launch. You will stay logged in afterwards.
 The installer asks you to choose English or Japanese.
 
 
-## Startup mode (Settings → Startup mode)
 
-| Mode | Description |
-| --- | --- |
-| **Browser (recommended)** | Loads Discord with a standard Chrome user agent. Most stable; screen sharing uses the custom capture pipeline. |
-| App (experimental) | Loads Discord with the official desktop user agent. Emulates `DiscordNative`; **screen sharing may be unstable or not work at all**, and other features may break. It is automatically disabled after repeated JS errors. |
-
-**Memory management is identical in both modes** — the memory system (focus-aware low-memory target,
-background throttling, cache purging) is implemented in Rust/WebView2 and does not depend on the user agent.
 ## Settings
 
 **Right-click the FastDiscd icon in the system tray → "Settings..."** (left-click restores the main window).

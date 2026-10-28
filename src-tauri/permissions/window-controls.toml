@@ -43,6 +43,4 @@ commands.allow = [
     "capture_start",
     "capture_stop",
     "js_guard_error",
-    "disable_screen_share",
-    "set_browser_mode",
 ]

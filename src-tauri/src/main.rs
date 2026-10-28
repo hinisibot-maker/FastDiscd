@@ -22,10 +22,6 @@ const CHROME_UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
      Chrome/141.0.0.0 Safari/537.36";
 
-const DISCORD_APP_UA: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
-     discord/1.0.9265 Chrome/141.0.0.0 Electron/37.6.0 Safari/537.36";
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Config {
@@ -51,8 +47,6 @@ struct Config {
     hardware_acceleration: bool,
     /// UI 言語: "auto" (Discord に合わせる) / "en" / "ja"
     language: String,
-    /// 起動モード: "browser" (推奨) / "app"
-    app_mode: String,
     /// 画面共有（実験的）
     screen_share: bool,
     /// フォーカス時のメモリ目標 ("normal" | "low")
@@ -77,7 +71,6 @@ impl Default for Config {
             minimize_to_tray: false,
             hardware_acceleration: true,
             language: "auto".to_string(),
-            app_mode: "browser".to_string(),
             screen_share: false,
             mem_focused: "normal".to_string(),
             mem_unfocused: "low".to_string(),
@@ -112,8 +105,6 @@ fn main() {
             capture_start,
             capture_stop,
             js_guard_error,
-            disable_screen_share,
-            set_browser_mode,
             window_minimize,
             window_toggle_maximize,
             window_close,
@@ -129,14 +120,10 @@ fn main() {
                 .visible(!cfg.start_minimized)
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(720.0, 480.0)
-                .user_agent(if config().app_mode == "app" { DISCORD_APP_UA } else { CHROME_UA })
+                .user_agent(CHROME_UA)
                 .disable_drag_drop_handler()
                 .decorations(false)
                 .initialization_script(TITLEBAR_JS)
-                .initialization_script(&format!(
-                    "window.__FASTDISC_APP_MODE = {:?}; window.__FASTDISC_SCREEN_SHARE = {};",
-                    cfg.app_mode, cfg.screen_share
-                ))
                 .initialization_script(SHARE_JS)
                 .background_color(tauri::utils::config::Color(30, 31, 34, 255))
                 .background_throttling(BackgroundThrottlingPolicy::Suspend)
@@ -1044,15 +1031,6 @@ fn js_guard_error(message: String) {
 }
 
 #[tauri::command]
-fn set_browser_mode() {
-    update_config(|c| {
-        c.app_mode = "browser".to_string();
-        true
-    });
-    log("switched to browser mode (app mode failed)");
-}
-
-#[tauri::command]
 fn disable_screen_share() {
     update_config(|c| {
         c.screen_share = false;
@@ -1388,175 +1366,6 @@ const SHARE_JS: &str = r##"
         guard((e.reason && e.reason.message) || "rejection");
     });
 
-    if (window.__FASTDISC_APP_MODE === "app") {
-        try { installNativeStub(); } catch (e) { guard(e); }
-    }
-
-    function installNativeStub() {
-        var noop = function () { };
-        var promise = function (v) { return Promise.resolve(v); };
-        var U = (function () {
-            var fn = function () { return U; };
-            U = new Proxy(fn, {
-                get: function (target, prop) {
-                    if (prop === "then") return undefined;
-                    if (prop === Symbol.toPrimitive) return function () { return ""; };
-                    if (prop === "toString" || prop === "valueOf") return function () { return ""; };
-                    if (prop === "toJSON") return function () { return null; };
-                    return U;
-                },
-                apply: function () { return U; },
-                construct: function () { return U; }
-            });
-            return U;
-        })();
-        var anyFn = function () { return U; };
-
-        function mod(extra) {
-            var base = Object.assign({
-                on: noop, off: noop, once: noop, send: noop, invoke: promise, emit: noop,
-                get: anyFn, set: noop, start: noop, stop: noop, isSupported: function () { return false; }
-            }, extra);
-            return new Proxy(base, {
-                get: function (target, prop) {
-                    if (prop in target) return target[prop];
-                    var name = String(prop);
-                    if (!seen[name] && Object.keys(seen).length < 200) {
-                        seen[name] = true;
-                        try { invoke("js_guard_error", { message: "native-access:" + name }); } catch (e) { }
-                    }
-                    if (name === "getGPUDriverVersions") {
-                        try { invoke("js_guard_error", { message: "stack:" + String(new Error().stack).slice(0, 600) }); } catch (e) { }
-                    }
-                    if (/^(get|ensure|is|has|set|check|request|fetch|load|start|stop|enable|disable)/i.test(name)) {
-                        return function () { return Promise.resolve(undefined); };
-                    }
-                    return anyFn;
-                }
-            });
-        }
-
-        var seen = window.__fastdiscNativeSeen || (window.__fastdiscNativeSeen = {});
-        var app = mod({
-            getVersion: function () { return "1.0.9266"; },
-            getBuildNumber: function () { return 9266; },
-            getManifest: function () { return {}; },
-            getReleaseChannel: function () { return "stable"; },
-            getArch: function () { return "x64"; },
-            getPath: function () { return ""; },
-            appArch: function () { return "x64"; },
-            getPreferredSystemLanguages: function () { return promise(["ja-JP", "en-US"]); },
-            requireModule: function () { return {}; },
-            getModuleVersions: function () { return {}; },
-            setMemoryInformation: function () { return promise(); },
-            getGPUDriverVersions: function () { return promise({}); },
-            setDevtoolsCallbacks: noop,
-            relaunch: noop,
-            setBadge: noop
-        });
-        var api = {
-            isRenderer: true,
-            setUncaughtExceptionHandler: noop,
-            nativeModules: mod({
-                require: function () { return {}; },
-                setGameCandidateOverrides: noop,
-                getGPUDriverVersions: function () { return promise({}); }
-            }),
-            process: mod({
-                platform: "win32", arch: "x64", type: "renderer", env: {},
-                versions: { electron: "42.7.1", chrome: "141.0.0.0", node: "22.14.0" },
-                appArch: function () { return "x64"; },
-                getPreferredSystemLanguages: function () { return promise(["ja-JP", "en-US"]); },
-                requireModule: function () { return {}; },
-                getModuleVersions: function () { return {}; },
-                setMemoryInformation: function () { return promise(); },
-                setDevtoolsCallbacks: noop,
-                getSystemIdleTimeMs: function () { return 0; },
-                getGPUDriverVersions: function () { return promise({}); },
-                getSystemInfo: function () { return promise({ cpus: [], gpus: [], electronGPUInfo: {}, total_memory: 17179869184 }); }
-            }),
-            os: mod({ platform: "win32", arch: "x64", release: "10.0.22631", type: "Windows_NT", version: "10.0.22631", homedir: function () { return ""; } }),
-            app: app,
-            clipboard: mod({ copy: noop, read: function () { return ""; } }),
-            ipc: mod({ send: noop, invoke: promise, on: noop, off: noop }),
-            gpuSettings: mod({
-                getEnableHardwareAcceleration: function () { return true; },
-                getGPUDriverVersions: function () { return promise({}); }
-            }),
-            window: mod({ minimize: noop, maximize: noop, restore: noop, close: noop, focus: noop, setZoom: noop, getZoom: function () { return 1; } }),
-            powerMonitor: mod({ getSystemIdleTime: function () { return 0; }, on: noop }),
-            ntpClock: mod({}),
-            spellCheck: mod({}),
-            crashReporter: mod({}),
-            desktopCapture: mod({
-                getSources: function () { return promise([{ id: "screen:0:0", name: "Screen", thumbnail: { toDataURL: function () { return ""; } } }]); },
-                chooseScreen: function () { return promise("screen:0:0"); }
-            }),
-            activityCapture: mod({}),
-            fileManager: mod({}),
-            clips: mod({}),
-            processUtils: mod({
-                getCPUCoreCount: function () { return 8; },
-                getCurrentCPUUsagePercent: function () { return 0; },
-                getProcessUptime: function () { return 0; },
-                getSystemIdleTimeMs: function () { return 0; },
-                getPreferredSystemLanguages: function () { return promise(["ja-JP", "en-US"]); },
-                getModuleVersions: function () { return promise({}); },
-                getGPUDriverVersions: function () { return promise({}); },
-                getLastCrash: function () { return null; },
-                flushDNSCache: function () { return promise(); },
-                flushCookies: function () { return promise(); },
-                flushStorageData: function () { return promise(); },
-                purgeMemory: noop,
-                setGameCandidateOverrides: noop,
-                getSystemInfo: function () {
-                    return promise({
-                        cpus: [{ model: "Generic CPU", speed: 3000 }],
-                        gpus: [],
-                        electronGPUInfo: {
-                            gpuDevice: [{ vendorId: 4318, deviceId: 9860, driverVersion: "551.23", vendorString: "NVIDIA" }],
-                            auxAttributes: {},
-                            machineModelName: "PC",
-                            machineModelVersion: "1.0"
-                        },
-                        total_memory: 17179869184
-                    });
-                }
-            }),
-            powerSaveBlocker: mod({ start: function () { return 0; }, stop: noop, isStarted: function () { return false; } }),
-            frameDebugger: mod({}),
-            frameView: mod({}),
-            http: mod({}),
-            accessibility: mod({}),
-            features: mod({ get: function () { return false; }, set: noop }),
-            settings: mod({ get: anyFn, set: noop }),
-            userDataCache: mod({}),
-            thumbar: mod({}),
-            safeStorage: mod({
-                isEncryptionAvailable: function () { return false; },
-                encryptString: function () { return new Uint8Array(0); },
-                decryptString: function () { return ""; }
-            }),
-            hardware: mod({}),
-            tracing: mod({}),
-            riotGames: mod({}),
-            cs2Gsi: mod({}),
-            dotaGsi: mod({}),
-            rocketLeagueStatsApi: mod({}),
-            webAuthn: mod({}),
-            gcEvents: mod({}),
-            sysimg: mod({})
-        };
-
-        window.DiscordNative = new Proxy(api, {
-            get: function (target, prop) {
-                if (prop in target) return target[prop];
-                try { invoke("js_guard_error", { message: "native-access:DiscordNative." + String(prop) }); } catch (e) { }
-                return mod({});
-            }
-        });
-        try { window.popouts = new Map(); } catch (e) { }
-    }
     function installCapture() {
         if (window.__fastdiscCapture) return;
         window.__fastdiscCapture = true;
@@ -1609,19 +1418,6 @@ const SHARE_JS: &str = r##"
     invoke("get_settings").then(function (s) {
         window.__fastdiscSettings = s;
         if (!s.screenShare) return;
-        if (s.appMode === "app") {
-            // 起動失敗（真っ白）を検知したらスタブを外して自動復帰
-            setTimeout(function () {
-                var mount = document.getElementById("app-mount");
-                var text = document.body ? document.body.innerText : "";
-                if (!mount || text.trim().length < 5) {
-                    guard("app mode appears broken");
-                    try { delete window.DiscordNative; } catch (e) { }
-                    try { invoke("set_browser_mode"); } catch (e) { }
-                    location.reload();
-                }
-            }, 10000);
-        }
         installCapture();
     }).catch(function () { });
 })();
