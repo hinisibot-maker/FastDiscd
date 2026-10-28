@@ -387,7 +387,7 @@ fn open_settings(app: &AppHandle) {
 }
 
 fn create_settings_window(app: &AppHandle, prewarm: bool) -> tauri::Result<WebviewWindow> {
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    let window = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title(settings_title())
         .inner_size(580.0, 660.0)
         .resizable(false)
@@ -396,7 +396,18 @@ fn create_settings_window(app: &AppHandle, prewarm: bool) -> tauri::Result<Webvi
         .visible(!prewarm)
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
         .center()
-        .build()
+        .build()?;
+
+    // × ボタンで破棄せず非表示にする（再生成によるフリーズ防止）
+    let handle = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = handle.hide();
+        }
+    });
+
+    Ok(window)
 }
 
 fn settings_title() -> &'static str {
