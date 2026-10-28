@@ -1458,7 +1458,10 @@ const SHARE_JS: &str = r##"
             app: app,
             clipboard: mod({ copy: noop, read: function () { return ""; } }),
             ipc: mod({ send: noop, invoke: promise, on: noop, off: noop }),
-            gpuSettings: mod({ getEnableHardwareAcceleration: function () { return true; } }),
+            gpuSettings: mod({
+                getEnableHardwareAcceleration: function () { return true; },
+                getGPUDriverVersions: function () { return promise({}); }
+            }),
             window: mod({ minimize: noop, maximize: noop, restore: noop, close: noop, focus: noop, setZoom: noop, getZoom: function () { return 1; } }),
             powerMonitor: mod({ getSystemIdleTime: function () { return 0; }, on: noop }),
             ntpClock: mod({}),
@@ -1476,8 +1479,28 @@ const SHARE_JS: &str = r##"
                 getCurrentCPUUsagePercent: function () { return 0; },
                 getProcessUptime: function () { return 0; },
                 getSystemIdleTimeMs: function () { return 0; },
-                getPreferredSystemLanguages: function () { return ["ja-JP", "en-US"]; },
-                setGameCandidateOverrides: noop
+                getPreferredSystemLanguages: function () { return promise(["ja-JP", "en-US"]); },
+                getModuleVersions: function () { return promise({}); },
+                getGPUDriverVersions: function () { return promise({}); },
+                getLastCrash: function () { return null; },
+                flushDNSCache: function () { return promise(); },
+                flushCookies: function () { return promise(); },
+                flushStorageData: function () { return promise(); },
+                purgeMemory: noop,
+                setGameCandidateOverrides: noop,
+                getSystemInfo: function () {
+                    return promise({
+                        cpus: [{ model: "Generic CPU", speed: 3000 }],
+                        gpus: [],
+                        electronGPUInfo: {
+                            gpuDevice: [{ vendorId: 4318, deviceId: 9860, driverVersion: "551.23", vendorString: "NVIDIA" }],
+                            auxAttributes: {},
+                            machineModelName: "PC",
+                            machineModelVersion: "1.0"
+                        },
+                        total_memory: 17179869184
+                    });
+                }
             }),
             powerSaveBlocker: mod({ start: function () { return 0; }, stop: noop, isStarted: function () { return false; } }),
             frameDebugger: mod({}),
@@ -1507,7 +1530,7 @@ const SHARE_JS: &str = r##"
         window.DiscordNative = new Proxy(api, {
             get: function (target, prop) {
                 if (prop in target) return target[prop];
-                return U;
+                return mod({});
             }
         });
         try { window.popouts = new Map(); } catch (e) { }
