@@ -263,7 +263,7 @@ fn debug_log(message: String) {
 #[tauri::command]
 fn close_settings(app: AppHandle) {
     if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.close();
+        let _ = window.hide();
     }
 }
 
@@ -545,7 +545,7 @@ fn install_webview_hooks(window: &WebviewWindow) {
             let screen = ScreenCaptureStartingEventHandler::create(Box::new(|_sender, args| {
                 if let Some(args) = args {
                     unsafe {
-                        let _ = args.SetHandled(true);
+                        let _ = args.SetHandled(false);
                         let _ = args.SetCancel(false);
                     }
                 }
