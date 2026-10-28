@@ -55,6 +55,14 @@ struct Config {
     mem_unfocused: String,
     /// 最小化時のメモリ目標
     mem_minimized: String,
+    /// カスタムメモリ設定の名前
+    custom_memory_name: String,
+    /// カスタム時のメモリ目標 ("normal" | "low")
+    custom_memory_level: String,
+    /// カスタム時にワーキングセットを強制解放する
+    custom_memory_trim: bool,
+    /// 強制解放までの待ち時間（秒）
+    custom_memory_trim_delay: u32,
 }
 
 impl Default for Config {
@@ -75,6 +83,10 @@ impl Default for Config {
             mem_focused: "normal".to_string(),
             mem_unfocused: "low".to_string(),
             mem_minimized: "low".to_string(),
+            custom_memory_name: "Custom".to_string(),
+            custom_memory_level: "low".to_string(),
+            custom_memory_trim: false,
+            custom_memory_trim_delay: 60,
         }
     }
 }
@@ -99,6 +111,7 @@ fn main() {
             clear_cache_now,
             close_settings,
             open_settings_window,
+            open_custom_settings,
             get_autostart,
             set_autostart,
             get_discord_locale,
@@ -406,6 +419,23 @@ fn get_discord_locale() -> String {
         .and_then(|m| m.lock().ok().map(|g| g.clone()))
         .unwrap_or_default()
 }
+
+#[tauri::command]
+fn open_custom_settings(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("custom") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(&app, "custom", WebviewUrl::App("custom.html".into()))
+        .title("カスタムメモリ設定")
+        .inner_size(460.0, 420.0)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .center()
+        .build();
+}
 fn open_settings(app: &AppHandle) {
     SETTINGS_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("settings") {
@@ -660,6 +690,8 @@ fn supervisor(window: WebviewWindow) {
     let mut low_memory = false;
     let mut tick: u32 = 0;
     let mut last_apply = std::time::Instant::now();
+    let mut low_since: Option<std::time::Instant> = None;
+    let mut last_trim = std::time::Instant::now() - Duration::from_secs(3600);
 
     loop {
         std::thread::sleep(Duration::from_millis(1200));
@@ -673,13 +705,34 @@ fn supervisor(window: WebviewWindow) {
         };
 
         let want_suspend = false;
-        let want_low = if minimized {
-            cfg.mem_minimized == "low"
+        let target = if minimized {
+            &cfg.mem_minimized
         } else if !focused {
-            cfg.mem_unfocused == "low"
+            &cfg.mem_unfocused
         } else {
-            cfg.mem_focused == "low"
+            &cfg.mem_focused
         };
+        let want_low = if target == "custom" {
+            cfg.custom_memory_level == "low"
+        } else {
+            target == "low"
+        };
+
+        if want_low {
+            if low_since.is_none() { low_since = Some(std::time::Instant::now()); }
+            if cfg.custom_memory_trim && cfg.custom_memory_trim_delay > 0 {
+                if let Some(start) = low_since {
+                    if start.elapsed() > Duration::from_secs(cfg.custom_memory_trim_delay as u64)
+                        && last_trim.elapsed() > Duration::from_secs(90)
+                    {
+                        trim_webview_processes();
+                        last_trim = std::time::Instant::now();
+                    }
+                }
+            }
+        } else {
+            low_since = None;
+        }
 
         let reassert = want_low && last_apply.elapsed() > Duration::from_secs(20);
         if want_suspend != suspended || want_low != low_memory || reassert {

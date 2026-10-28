@@ -120,24 +120,37 @@
                 <span data-i18n="mem.focused"></span>
                 <div class="hint" data-i18n="mem.hint"></div>
             </div>
-            <select id="memFocused">
+            <select id="memFocused" class="memSelect">
                 <option value="normal">Normal</option>
                 <option value="low">Low</option>
+                <option value="custom">+</option>
             </select>
         </div>
         <div class="row">
             <div class="label"><span data-i18n="mem.unfocused"></span></div>
-            <select id="memUnfocused">
+            <select id="memUnfocused" class="memSelect">
                 <option value="normal">Normal</option>
                 <option value="low">Low</option>
+                <option value="custom">+</option>
             </select>
         </div>
         <div class="row">
             <div class="label"><span data-i18n="mem.minimized"></span></div>
-            <select id="memMinimized">
+            <select id="memMinimized" class="memSelect">
                 <option value="normal">Normal</option>
                 <option value="low">Low</option>
+                <option value="custom">+</option>
             </select>
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="row">
+            <div class="label">
+                <span data-i18n="mem.custom"></span>
+                <div class="hint" data-i18n="mem.customHint"></div>
+            </div>
+            <button class="secondary" id="openCustom">＋</button>
         </div>
     </div>
 
@@ -245,7 +258,9 @@
                 "mem.focused": "Memory target: focused",
                 "mem.unfocused": "Memory target: unfocused",
                 "mem.minimized": "Memory target: minimized",
-                "mem.hint": "Low reduces memory usage but may be slower when returning."
+                "mem.hint": "Low reduces memory usage but may be slower when returning.",
+                "mem.custom": "Custom memory profile",
+                "mem.customHint": "Define a named profile with detailed settings"
             },
             ja: {
                 "title": "FastDiscd 設定",
@@ -288,7 +303,9 @@
                 "mem.focused": "メモリ目標: フォーカス時",
                 "mem.unfocused": "メモリ目標: 非フォーカス時",
                 "mem.minimized": "メモリ目標: 最小化時",
-                "mem.hint": "Low はメモリを抑えますが、復帰時に重くなることがあります。"
+                "mem.hint": "Low はメモリを抑えますが、復帰時に重くなることがあります。",
+                "mem.custom": "カスタムメモリ設定",
+                "mem.customHint": "名前を付けた詳細プロファイルを定義できます"
             }
         };
 
@@ -386,6 +403,7 @@
         $("memFocused").addEventListener("change", save);
         $("memUnfocused").addEventListener("change", save);
         $("memMinimized").addEventListener("change", save);
+        $("openCustom").addEventListener("click", () => invoke("open_custom_settings"));
         $("screenShare").addEventListener("change", save);
 
         $("clearNow").addEventListener("click", async () => {

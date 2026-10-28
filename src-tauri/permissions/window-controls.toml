@@ -19,6 +19,7 @@ commands.allow = [
     "get_autostart",
     "set_autostart",
     "open_settings_window",
+    "open_custom_settings",
 ]
 
 [[permission]]
