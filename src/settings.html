@@ -147,6 +147,7 @@
                 <div class="hint" data-i18n="ptt.hint"></div>
             </div>
             <button class="secondary" id="pttButton">—</button>
+            <button class="secondary" id="pttClear" title="Clear">×</button>
         </div>
     </div>
 
@@ -387,6 +388,12 @@
         });
 
         $("close").addEventListener("click", () => invoke("close_settings"));
+
+        $("pttClear").addEventListener("click", () => {
+            pttCode = "";
+            $("pttButton").textContent = t("ptt.none");
+            save();
+        });
 
         $("pttButton").addEventListener("click", () => {
             capturing = true;

@@ -419,8 +419,10 @@ fn create_settings_window(app: &AppHandle, prewarm: bool) -> tauri::Result<Webvi
     let handle = window.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            let _ = handle.hide();
+            if config().minimize_to_tray {
+                api.prevent_close();
+                let _ = handle.hide();
+            }
         }
     });
 
@@ -1384,7 +1386,10 @@ const SHARE_JS: &str = r##"
                     return ensure().then(function () {
                         var stream = canvas.captureStream(10);
                         var track = stream.getVideoTracks()[0];
-                        if (track) { try { track.contentHint = "detail"; } catch (e) { } }
+                        if (track) {
+                            try { track.contentHint = "detail"; } catch (e) { }
+                            track.addEventListener("ended", function () { invoke("capture_stop"); });
+                        }
                         return stream;
                     });
                 }
@@ -1405,7 +1410,19 @@ const SHARE_JS: &str = r##"
     invoke("get_settings").then(function (s) {
         window.__fastdiscSettings = s;
         if (!s.screenShare) return;
-        if (s.appMode === "app") installNativeStub();
+        if (s.appMode === "app") {
+            installNativeStub();
+            // 起動失敗（真っ白）を検知したらスタブを外して自動復帰
+            setTimeout(function () {
+                var mount = document.getElementById("app-mount");
+                var text = document.body ? document.body.innerText : "";
+                if (!mount || text.trim().length < 5) {
+                    guard("app mode appears broken");
+                    try { delete window.DiscordNative; } catch (e) { }
+                    location.reload();
+                }
+            }, 10000);
+        }
         installCapture();
     }).catch(function () { });
 })();
