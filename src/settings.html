@@ -67,6 +67,33 @@
 
         .status { color: var(--muted); font-size: 12px; margin-top: 10px; min-height: 16px; }
     </style>
+    <div id="customModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;align-items:center;justify-content:center;">
+        <div style="width:420px;background:#2b2d31;border-radius:12px;padding:20px 22px;box-shadow:0 8px 32px rgba(0,0,0,.6);">
+            <div style="font-size:17px;font-weight:700;margin-bottom:14px;">カスタムメモリ設定</div>
+            <div class="row">
+                <div class="label">プリセット名<div class="hint">一覧に表示される名前</div></div>
+                <input type="text" id="cmName" maxlength="24" style="width:160px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
+            </div>
+            <div class="row">
+                <div class="label">メモリ目標</div>
+                <select id="cmLevel"><option value="normal">Normal</option><option value="low">Low</option></select>
+            </div>
+            <div class="row">
+                <div class="label">ワーキングセットを強制解放<div class="hint">指定時間後に物理メモリを返します</div></div>
+                <input type="checkbox" id="cmTrim" />
+            </div>
+            <div class="row">
+                <div class="label">待ち時間（秒）</div>
+                <input type="number" id="cmDelay" min="5" max="3600" step="5" style="width:100px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
+                <button class="secondary" id="cmCancel">閉じる</button>
+                <button id="cmSave">保存</button>
+            </div>
+            <div class="status" id="cmStatus"></div>
+        </div>
+    </div>
+<script>window.addEventListener('error',function(e){var d=document.createElement('div');d.style.cssText='position:fixed;left:0;bottom:0;background:#c00;color:#fff;font:12px monospace;padding:6px;z-index:99;max-width:100%';d.textContent='ERR: '+(e.message||'')+' @'+(e.lineno||0);document.body.appendChild(d);});</script>
 </head>
 
 <body>
@@ -211,7 +238,9 @@
     <div class="status" id="status"></div>
 
     <script>
-        const { invoke } = window.__TAURI__.core;
+        const tauriApi = window.__TAURI__ || {};
+        const invoke = (tauriApi.core && tauriApi.core.invoke) || (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+        if (!invoke) { document.addEventListener("DOMContentLoaded", function () { var s = document.getElementById("status"); if (s) s.textContent = "Tauri IPC unavailable"; }); }
 
         const I18N = {
             en: {
@@ -473,8 +502,10 @@
             await invoke("set_autostart", { enabled: $("startWithWindows").checked });
         });
 
+        applyLanguage();
+
         invoke("get_settings").then(async s => {
-            render(s);
+            try { render(s); } catch (e) { console.error(e); }
             lang = await resolveLanguage(s.language || "auto");
             applyLanguage();
             ready = true;
@@ -482,32 +513,6 @@
             $("status").textContent = t("status.loadError") + e;
         });
     </script>
-    <div id="customModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;align-items:center;justify-content:center;">
-        <div style="width:420px;background:#2b2d31;border-radius:12px;padding:20px 22px;box-shadow:0 8px 32px rgba(0,0,0,.6);">
-            <div style="font-size:17px;font-weight:700;margin-bottom:14px;">カスタムメモリ設定</div>
-            <div class="row">
-                <div class="label">プリセット名<div class="hint">一覧に表示される名前</div></div>
-                <input type="text" id="cmName" maxlength="24" style="width:160px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
-            </div>
-            <div class="row">
-                <div class="label">メモリ目標</div>
-                <select id="cmLevel"><option value="normal">Normal</option><option value="low">Low</option></select>
-            </div>
-            <div class="row">
-                <div class="label">ワーキングセットを強制解放<div class="hint">指定時間後に物理メモリを返します</div></div>
-                <input type="checkbox" id="cmTrim" />
-            </div>
-            <div class="row">
-                <div class="label">待ち時間（秒）</div>
-                <input type="number" id="cmDelay" min="5" max="3600" step="5" style="width:100px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
-            </div>
-            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
-                <button class="secondary" id="cmCancel">閉じる</button>
-                <button id="cmSave">保存</button>
-            </div>
-            <div class="status" id="cmStatus"></div>
-        </div>
-    </div>
 </body>
 
 </html>
