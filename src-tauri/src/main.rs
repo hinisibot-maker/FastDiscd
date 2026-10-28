@@ -112,6 +112,7 @@ fn main() {
             close_settings,
             open_settings_window,
             open_custom_settings,
+            close_custom,
             get_autostart,
             set_autostart,
             get_discord_locale,
@@ -421,6 +422,13 @@ fn get_discord_locale() -> String {
 }
 
 #[tauri::command]
+fn close_custom(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("custom") {
+        let _ = window.close();
+    }
+}
+
+#[tauri::command]
 fn open_custom_settings(app: AppHandle) {
     if let Some(window) = app.get_webview_window("custom") {
         let _ = window.show();
@@ -433,6 +441,7 @@ fn open_custom_settings(app: AppHandle) {
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
+        .background_color(tauri::utils::config::Color(30, 31, 34, 255))
         .center()
         .build();
 }

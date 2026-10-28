@@ -90,7 +90,7 @@
         }
 
         $("save").addEventListener("click", save);
-        $("cancel").addEventListener("click", () => window.__TAURI__.window.getCurrentWindow().close());
+        $("cancel").addEventListener("click", () => invoke("close_custom"));
         invoke("get_settings").then(render).catch(e => { $("status").textContent = "読み込み失敗: " + e; });
     </script>
 </body>

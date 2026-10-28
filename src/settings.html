@@ -123,7 +123,6 @@
             <select id="memFocused" class="memSelect">
                 <option value="normal">Normal</option>
                 <option value="low">Low</option>
-                <option value="custom">+</option>
             </select>
         </div>
         <div class="row">
@@ -131,7 +130,6 @@
             <select id="memUnfocused" class="memSelect">
                 <option value="normal">Normal</option>
                 <option value="low">Low</option>
-                <option value="custom">+</option>
             </select>
         </div>
         <div class="row">
@@ -139,7 +137,6 @@
             <select id="memMinimized" class="memSelect">
                 <option value="normal">Normal</option>
                 <option value="low">Low</option>
-                <option value="custom">+</option>
             </select>
         </div>
     </div>
@@ -348,6 +345,13 @@
             $("zoom").value = s.zoom;
             $("language").value = s.language || "auto";
             $("screenShare").checked = !!s.screenShare;
+            var customName = s.customMemoryName || "Custom";
+            ["memFocused", "memUnfocused", "memMinimized"].forEach(function (id) {
+                var sel = $(id);
+                var opt = Array.prototype.find.call(sel.options, function (o) { return o.value === "custom"; });
+                if (!opt) { opt = new Option(customName, "custom"); sel.add(opt); }
+                else opt.textContent = customName;
+            });
             $("memFocused").value = s.memFocused || "normal";
             $("memUnfocused").value = s.memUnfocused || "low";
             $("memMinimized").value = s.memMinimized || "low";
@@ -403,7 +407,28 @@
         $("memFocused").addEventListener("change", save);
         $("memUnfocused").addEventListener("change", save);
         $("memMinimized").addEventListener("change", save);
-        $("openCustom").addEventListener("click", () => invoke("open_custom_settings"));
+        $("openCustom").addEventListener("click", () => {
+            $("cmName").value = settings.customMemoryName || "Custom";
+            $("cmLevel").value = settings.customMemoryLevel || "low";
+            $("cmTrim").checked = !!settings.customMemoryTrim;
+            $("cmDelay").value = settings.customMemoryTrimDelay || 60;
+            $("customModal").style.display = "flex";
+        });
+        $("cmCancel").addEventListener("click", () => { $("customModal").style.display = "none"; });
+        $("cmSave").addEventListener("click", async () => {
+            settings.customMemoryName = ($("cmName").value || "Custom").slice(0, 24);
+            settings.customMemoryLevel = $("cmLevel").value;
+            settings.customMemoryTrim = $("cmTrim").checked;
+            settings.customMemoryTrimDelay = Math.max(5, Number($("cmDelay").value) || 60);
+            try {
+                await invoke("save_settings", { settings });
+                $("customModal").style.display = "none";
+                render(settings);
+                $("cmStatus").textContent = "";
+            } catch (e) {
+                $("cmStatus").textContent = "保存に失敗: " + e;
+            }
+        });
         $("screenShare").addEventListener("change", save);
 
         $("clearNow").addEventListener("click", async () => {
@@ -457,6 +482,32 @@
             $("status").textContent = t("status.loadError") + e;
         });
     </script>
+    <div id="customModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;align-items:center;justify-content:center;">
+        <div style="width:420px;background:#2b2d31;border-radius:12px;padding:20px 22px;box-shadow:0 8px 32px rgba(0,0,0,.6);">
+            <div style="font-size:17px;font-weight:700;margin-bottom:14px;">カスタムメモリ設定</div>
+            <div class="row">
+                <div class="label">プリセット名<div class="hint">一覧に表示される名前</div></div>
+                <input type="text" id="cmName" maxlength="24" style="width:160px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
+            </div>
+            <div class="row">
+                <div class="label">メモリ目標</div>
+                <select id="cmLevel"><option value="normal">Normal</option><option value="low">Low</option></select>
+            </div>
+            <div class="row">
+                <div class="label">ワーキングセットを強制解放<div class="hint">指定時間後に物理メモリを返します</div></div>
+                <input type="checkbox" id="cmTrim" />
+            </div>
+            <div class="row">
+                <div class="label">待ち時間（秒）</div>
+                <input type="number" id="cmDelay" min="5" max="3600" step="5" style="width:100px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
+                <button class="secondary" id="cmCancel">閉じる</button>
+                <button id="cmSave">保存</button>
+            </div>
+            <div class="status" id="cmStatus"></div>
+        </div>
+    </div>
 </body>
 
 </html>
