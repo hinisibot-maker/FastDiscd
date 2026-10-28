@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FastDiscd 設定</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #1e1f22;
+            --card: #2b2d31;
+            --text: #dbdee1;
+            --muted: #949ba4;
+            --accent: #5865f2;
+            --line: #3f4147;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 22px 24px 18px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Yu Gothic UI", "Segoe UI", sans-serif;
+            font-size: 14px;
+            user-select: none;
+        }
+
+        h1 {
+            font-size: 18px;
+            margin: 0 0 4px;
+        }
+
+        .sub {
+            color: var(--muted);
+            font-size: 12px;
+            margin-bottom: 18px;
+        }
+
+        .group {
+            background: var(--card);
+            border-radius: 10px;
+            padding: 6px 14px;
+            margin-bottom: 12px;
+        }
+
+        .row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 0;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .row:last-child { border-bottom: none; }
+
+        .row .label { flex: 1; }
+
+        .row .hint {
+            color: var(--muted);
+            font-size: 11.5px;
+            margin-top: 2px;
+        }
+
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent);
+            margin: 0;
+        }
+
+        input[type="range"] {
+            flex: 0 0 150px;
+            accent-color: var(--accent);
+        }
+
+        .value {
+            width: 46px;
+            text-align: right;
+            color: var(--muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 16px;
+        }
+
+        button {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 9px 16px;
+            font-size: 13.5px;
+            cursor: pointer;
+        }
+
+        button.secondary {
+            background: #4e5058;
+        }
+
+        button:hover { filter: brightness(1.1); }
+
+        .status {
+            color: var(--muted);
+            font-size: 12px;
+            margin-top: 10px;
+            min-height: 16px;
+        }
+    </style>
+    <script>
+        window.addEventListener("error", function (e) {
+            document.title = "ERR: " + (e.message || "unknown");
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+            document.title = "REJ: " + (e.reason && e.reason.message ? e.reason.message : e.reason);
+        });
+    </script>
+</head>
+
+<body>
+    <h1>FastDiscd 設定</h1>
+    <div class="sub">設定は即時反映され、自動的に保存されます。</div>
+
+    <div class="group">
+        <div class="row">
+            <div class="label">
+                ページ読み込み時にキャッシュを削除
+                <div class="hint">ログイン画面→アプリなど、ページ遷移時に HTTP キャッシュを破棄します</div>
+            </div>
+            <input type="checkbox" id="clearCacheOnNavigation" />
+        </div>
+        <div class="row">
+            <div class="label">
+                チャンネル切替時に前ページのキャッシュを削除
+                <div class="hint">チャンネルを切り替えたとき、以前のページの画像・GIF キャッシュを破棄します</div>
+            </div>
+            <input type="checkbox" id="clearCacheOnChannelChange" />
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="row">
+            <div class="label">
+                最小化時にメモリを解放
+                <div class="hint">最小化中は WebView2 を省メモリ状態にします（通知は止まりません）</div>
+            </div>
+            <input type="checkbox" id="suspendOnMinimize" />
+        </div>
+        <div class="row">
+            <div class="label">
+                非フォーカス時にメモリ目標を Low にする
+                <div class="hint">他のウィンドウを操作している間、WebView2 に省メモリ動作を指示します</div>
+            </div>
+            <input type="checkbox" id="lowMemoryOnBlur" />
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="row">
+            <div class="label">
+                プッシュトゥトーク（グローバル）
+                <div class="hint">Discord の PTT キーと同じキーを設定してください。別ウィンドウを見ていても反応します</div>
+            </div>
+            <button class="secondary" id="pttButton">未設定</button>
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="row">
+            <div class="label">
+                Windows 起動時に自動で開く
+                <div class="hint">HKCU の Run に登録します（管理者権限不要）</div>
+            </div>
+            <input type="checkbox" id="startWithWindows" />
+        </div>
+        <div class="row">
+            <div class="label">
+                起動時は最小化して開始
+                <div class="hint">次回起動から反映されます</div>
+            </div>
+            <input type="checkbox" id="startMinimized" />
+        </div>
+        <div class="row">
+            <div class="label">
+                最小化時にタスクトレイへ格納
+                <div class="hint">タスクトレイのアイコンを左クリックで戻ります</div>
+            </div>
+            <input type="checkbox" id="minimizeToTray" />
+        </div>
+        <div class="row">
+            <div class="label">
+                ハードウェアアクセラレーション（GPU）
+                <div class="hint">オフにすると GPU を使わずに描画します（再起動後に反映）</div>
+            </div>
+            <input type="checkbox" id="hardwareAcceleration" />
+        </div>
+    </div>
+
+    <div class="group">
+        <div class="row">
+            <div class="label">
+                拡大率
+                <div class="hint">Discord の設定に拡大率が表示されない環境向けの代替設定です</div>
+            </div>
+            <input type="range" id="zoom" min="0.5" max="2" step="0.1" />
+            <span class="value" id="zoomValue">100%</span>
+        </div>
+    </div>
+
+    <div class="actions">
+        <button class="secondary" id="clearNow">キャッシュを今すぐ削除</button>
+        <button id="close">閉じる</button>
+    </div>
+    <div class="status" id="status"></div>
+
+    <script>
+        const { invoke } = window.__TAURI__.core;
+
+        const fields = ["clearCacheOnNavigation", "clearCacheOnChannelChange", "suspendOnMinimize", "lowMemoryOnBlur", "startMinimized", "minimizeToTray", "hardwareAcceleration"];
+        const $ = id => document.getElementById(id);
+
+        let state = null;
+        let ready = false;
+        let pttCode = "";
+        let capturing = false;
+
+        function pttLabel(code) {
+            if (!code) return "未設定";
+            if (code.startsWith("Key")) return code.slice(3);
+            if (code.startsWith("Digit")) return code.slice(5);
+            return code;
+        }
+
+        function render(settings) {
+            state = settings;
+            for (const key of fields) $(key).checked = !!settings[key];
+            $("zoom").value = settings.zoom;
+            pttCode = settings.pushToTalkCode || "";
+            $("pttButton").textContent = pttLabel(pttCode);
+            updateZoomLabel();
+            document.title = "FastDiscd 設定 — " + Math.round(settings.zoom * 100) + "%";
+            invoke("debug_log", { message: JSON.stringify(settings) });
+        }
+
+        function updateZoomLabel() {
+            $("zoomValue").textContent = Math.round(Number($("zoom").value) * 100) + "%";
+        }
+
+        function collect() {
+            return {
+                clearCacheOnNavigation: $("clearCacheOnNavigation").checked,
+                clearCacheOnChannelChange: $("clearCacheOnChannelChange").checked,
+                suspendOnMinimize: $("suspendOnMinimize").checked,
+                lowMemoryOnBlur: $("lowMemoryOnBlur").checked,
+                zoom: Number($("zoom").value),
+                pushToTalkCode: pttCode,
+                startMinimized: $("startMinimized").checked,
+                minimizeToTray: $("minimizeToTray").checked,
+                hardwareAcceleration: $("hardwareAcceleration").checked
+            };
+        }
+
+        let saveTimer = null;
+        async function save() {
+            if (!ready) return;
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(async () => {
+                const settings = collect();
+                try {
+                    await invoke("save_settings", { settings });
+                    $("status").textContent = "保存しました";
+                    setTimeout(() => ($("status").textContent = ""), 1500);
+                } catch (e) {
+                    $("status").textContent = "保存に失敗: " + e;
+                }
+            }, 150);
+        }
+
+        for (const key of fields) $(key).addEventListener("change", save);
+        $("zoom").addEventListener("input", () => { updateZoomLabel(); save(); });
+
+        $("clearNow").addEventListener("click", async () => {
+            await invoke("clear_cache_now");
+            $("status").textContent = "キャッシュを削除しました";
+            setTimeout(() => ($("status").textContent = ""), 1500);
+        });
+
+        $("close").addEventListener("click", () => invoke("close_settings"));
+
+        $("startWithWindows").addEventListener("change", async () => {
+            await invoke("set_autostart", { enabled: $("startWithWindows").checked });
+        });
+        invoke("get_autostart").then(v => { $("startWithWindows").checked = !!v; }).catch(() => { });
+
+        $("hardwareAcceleration").addEventListener("change", () => {
+            $("status").textContent = "GPU 設定は再起動後に反映されます";
+        });
+
+        $("pttButton").addEventListener("click", () => {
+            capturing = true;
+            $("pttButton").textContent = "キーを押してください…";
+            $("status").textContent = "Esc で解除";
+        });
+
+        window.addEventListener("keydown", e => {
+            if (!capturing) return;
+            e.preventDefault();
+            e.stopPropagation();
+            capturing = false;
+            if (e.code === "Escape") {
+                $("pttButton").textContent = pttLabel(pttCode);
+                $("status").textContent = "";
+                return;
+            }
+            pttCode = e.code;
+            $("pttButton").textContent = pttLabel(pttCode);
+            $("status").textContent = "PTT キーを " + pttLabel(pttCode) + " に設定しました";
+            save();
+        }, true);
+
+        invoke("get_settings").then(s => { render(s); ready = true; }).catch(e => {
+            $("status").textContent = "設定の読み込みに失敗: " + e;
+        });
+    </script>
+</body>
+
+</html>

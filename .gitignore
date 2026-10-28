@@ -1,0 +1,18 @@
+# ビルド成果物
+src-tauri/target/
+dist/
+*.exe
+
+# 依存
+node_modules/
+pnpm-lock.yaml
+
+# 生成物
+*.log
+*.zip
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

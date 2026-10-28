@@ -1,0 +1,43 @@
+{
+    "$schema": "https://schema.tauri.app/config/2",
+    "productName": "FastDiscd",
+    "version": "0.1.0",
+    "identifier": "com.fastdiscd.desktop",
+    "build": {
+        "frontendDist": "../src"
+    },
+    "app": {
+        "withGlobalTauri": true,
+        "windows": [],
+        "security": {
+            "csp": null
+        }
+    },
+    "bundle": {
+        "active": true,
+        "targets": [
+            "nsis"
+        ],
+        "icon": [
+            "icons/icon.ico"
+        ],
+        "publisher": "FastDiscd",
+        "copyright": "Copyright (c) 2026 FastDiscd",
+        "category": "SocialNetworking",
+        "shortDescription": "Fast, lightweight Discord client built with Rust + WebView2",
+        "longDescription": "Discord の Web クライアントを Rust + WebView2 で包んだ軽量クライアントです。UI とメッセージ送受信は Discord のものをそのまま使います。非公式クライアントのため、利用は自己責任でお願いします。",
+        "windows": {
+            "nsis": {
+                "installMode": "perMachine",
+                "installerIcon": "icons/icon.ico",
+                "languages": [
+                    "Japanese",
+                    "English"
+                ]
+            }
+        }
+    }
+}
+
+
+

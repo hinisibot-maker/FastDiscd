@@ -1,0 +1,36 @@
+[[permission]]
+identifier = "allow-window-controls"
+description = "独自タイトルバーからウィンドウ操作を行うための権限"
+commands.allow = [
+    "window_minimize",
+    "window_toggle_maximize",
+    "window_close",
+]
+
+[[permission]]
+identifier = "allow-settings-access"
+description = "設定ウィンドウから設定を読み書きするための権限"
+commands.allow = [
+    "get_settings",
+    "save_settings",
+    "debug_log",
+    "clear_cache_now",
+    "close_settings",
+    "get_autostart",
+    "set_autostart",
+    "open_settings_window",
+]
+
+[[permission]]
+identifier = "allow-remote-settings"
+description = "Discord の設定画面に埋め込んだ RustCord 設定から使う権限"
+commands.allow = [
+    "get_settings",
+    "save_settings",
+    "set_zoom",
+    "clear_cache_now",
+    "get_autostart",
+    "set_autostart",
+]
+
+
