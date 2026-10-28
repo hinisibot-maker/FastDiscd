@@ -1380,7 +1380,10 @@ const SHARE_JS: &str = r##"
             try { invoke("disable_screen_share"); } catch (e) { }
         }
     }
-    window.addEventListener("error", function (e) { guard(e.message || "error"); });
+    window.addEventListener("error", function (e) {
+        var detail = (e.error && e.error.stack) ? String(e.error.stack).slice(0, 700) : (e.message || "error");
+        guard(detail);
+    });
     window.addEventListener("unhandledrejection", function (e) {
         guard((e.reason && e.reason.message) || "rejection");
     });
