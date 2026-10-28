@@ -672,14 +672,18 @@ fn supervisor(window: WebviewWindow) {
     let mut suspended = false;
     let mut low_memory = false;
     let mut tick: u32 = 0;
+    let mut last_apply = std::time::Instant::now();
 
     loop {
         std::thread::sleep(Duration::from_millis(1200));
         tick = tick.wrapping_add(1);
 
         let cfg = config();
-        let minimized = window.is_minimized().unwrap_or(false);
-        let focused = window.is_focused().unwrap_or(true);
+        // Win32 で直接判定（Tauri の is_focused はフレームレス窓で不安定なことがある）
+        let (minimized, focused) = match window.hwnd() {
+            Ok(h) => unsafe { (IsIconic(h).as_bool(), GetForegroundWindow() == h) },
+            Err(_) => (window.is_minimized().unwrap_or(false), window.is_focused().unwrap_or(true)),
+        };
 
         let want_suspend = false;
         let want_low = if minimized {
@@ -690,10 +694,12 @@ fn supervisor(window: WebviewWindow) {
             cfg.mem_focused == "low"
         };
 
-        if want_suspend != suspended || want_low != low_memory {
+        let reassert = want_low && last_apply.elapsed() > Duration::from_secs(20);
+        if want_suspend != suspended || want_low != low_memory || reassert {
             apply_memory_state(&window, want_suspend, want_low);
             suspended = want_suspend;
             low_memory = want_low;
+            last_apply = std::time::Instant::now();
         }
 
         maybe_run_command(&window);
@@ -1180,7 +1186,9 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA};
-use windows::Win32::UI::WindowsAndMessaging::{IsZoomed, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, IsIconic, IsZoomed, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+};
 
 
 
