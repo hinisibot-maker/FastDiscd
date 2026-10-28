@@ -55,6 +55,12 @@ struct Config {
     app_mode: String,
     /// 画面共有（実験的）
     screen_share: bool,
+    /// フォーカス時のメモリ目標 ("normal" | "low")
+    mem_focused: String,
+    /// 非フォーカス時のメモリ目標
+    mem_unfocused: String,
+    /// 最小化時のメモリ目標
+    mem_minimized: String,
 }
 
 impl Default for Config {
@@ -73,6 +79,9 @@ impl Default for Config {
             language: "auto".to_string(),
             app_mode: "browser".to_string(),
             screen_share: false,
+            mem_focused: "normal".to_string(),
+            mem_unfocused: "low".to_string(),
+            mem_minimized: "low".to_string(),
         }
     }
 }
@@ -103,6 +112,7 @@ fn main() {
             capture_stop,
             js_guard_error,
             disable_screen_share,
+            set_browser_mode,
             window_minimize,
             window_toggle_maximize,
             window_close,
@@ -130,10 +140,14 @@ fn main() {
             apply_zoom(&window, config().zoom);
             build_tray(app)?;
 
-            // 設定ウィンドウを非表示で事前生成（初回表示を速くする）
-            if let Err(e) = create_settings_window(app.handle(), true) {
-                log(&format!("prewarm settings window failed: {e}"));
-            }
+            // 設定ウィンドウは起動を邪魔しないよう数秒後に事前生成する
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(4));
+                if let Err(e) = create_settings_window(&handle, true) {
+                    log(&format!("prewarm settings window failed: {e}"));
+                }
+            });
 
             let win = window.clone();
             std::thread::spawn(move || supervisor(win));
@@ -570,6 +584,13 @@ fn install_webview_hooks(window: &WebviewWindow) {
         }
         std::mem::forget(navigation);
 
+        if let Ok(controller2) = controller.cast::<ICoreWebView2Controller2>() {
+            let color = COREWEBVIEW2_COLOR { A: 255, R: 30, G: 31, B: 34 };
+            unsafe {
+                let _ = controller2.SetDefaultBackgroundColor(color);
+            }
+        }
+
         // 画面共有（配信）を許可する
         if let Ok(core27) = core.cast::<ICoreWebView2_27>() {
             let screen = ScreenCaptureStartingEventHandler::create(Box::new(|_sender, args| {
@@ -643,8 +664,13 @@ fn supervisor(window: WebviewWindow) {
         let focused = window.is_focused().unwrap_or(true);
 
         let want_suspend = false;
-        let want_low = (cfg.low_memory_on_blur && (minimized || !focused))
-            || (cfg.suspend_on_minimize && minimized);
+        let want_low = if minimized {
+            cfg.mem_minimized == "low"
+        } else if !focused {
+            cfg.mem_unfocused == "low"
+        } else {
+            cfg.mem_focused == "low"
+        };
 
         if want_suspend != suspended || want_low != low_memory {
             apply_memory_state(&window, want_suspend, want_low);
@@ -994,6 +1020,15 @@ fn js_guard_error(message: String) {
 }
 
 #[tauri::command]
+fn set_browser_mode() {
+    update_config(|c| {
+        c.app_mode = "browser".to_string();
+        true
+    });
+    log("switched to browser mode (app mode failed)");
+}
+
+#[tauri::command]
 fn disable_screen_share() {
     update_config(|c| {
         c.screen_share = false;
@@ -1108,6 +1143,7 @@ fn log(message: &str) {
 }
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
+    ICoreWebView2Controller2, COREWEBVIEW2_COLOR,
     ICoreWebView2, ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_19, ICoreWebView2_27,
     ICoreWebView2_3,
     COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
@@ -1419,6 +1455,7 @@ const SHARE_JS: &str = r##"
                 if (!mount || text.trim().length < 5) {
                     guard("app mode appears broken");
                     try { delete window.DiscordNative; } catch (e) { }
+                    try { invoke("set_browser_mode"); } catch (e) { }
                     location.reload();
                 }
             }, 10000);

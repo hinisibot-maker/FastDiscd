@@ -126,17 +126,27 @@
     <div class="group">
         <div class="row">
             <div class="label">
-                <span data-i18n="minimizeMem.label"></span>
-                <div class="hint" data-i18n="minimizeMem.hint"></div>
+                <span data-i18n="mem.focused"></span>
+                <div class="hint" data-i18n="mem.hint"></div>
             </div>
-            <input type="checkbox" id="suspendOnMinimize" />
+            <select id="memFocused">
+                <option value="normal">Normal</option>
+                <option value="low">Low</option>
+            </select>
         </div>
         <div class="row">
-            <div class="label">
-                <span data-i18n="lowMem.label"></span>
-                <div class="hint" data-i18n="lowMem.hint"></div>
-            </div>
-            <input type="checkbox" id="lowMemoryOnBlur" />
+            <div class="label"><span data-i18n="mem.unfocused"></span></div>
+            <select id="memUnfocused">
+                <option value="normal">Normal</option>
+                <option value="low">Low</option>
+            </select>
+        </div>
+        <div class="row">
+            <div class="label"><span data-i18n="mem.minimized"></span></div>
+            <select id="memMinimized">
+                <option value="normal">Normal</option>
+                <option value="low">Low</option>
+            </select>
         </div>
     </div>
 
@@ -244,7 +254,11 @@
                 "appMode.browser": "Browser (recommended)",
                 "appMode.app": "App (experimental)",
                 "share.label": "Screen sharing (experimental)",
-                "share.hint": "Uses a custom capture pipeline. May be unstable, especially in app mode."
+                "share.hint": "Uses a custom capture pipeline. May be unstable, especially in app mode.",
+                "mem.focused": "Memory target: focused",
+                "mem.unfocused": "Memory target: unfocused",
+                "mem.minimized": "Memory target: minimized",
+                "mem.hint": "Low reduces memory usage but may be slower when returning."
             },
             ja: {
                 "title": "FastDiscd 設定",
@@ -287,11 +301,15 @@
                 "appMode.browser": "ブラウザ（推奨）",
                 "appMode.app": "アプリ（実験的）",
                 "share.label": "画面共有（実験的）",
-                "share.hint": "独自キャプチャで配信します。不安定な場合があります（特にアプリモード）。"
+                "share.hint": "独自キャプチャで配信します。不安定な場合があります（特にアプリモード）。",
+                "mem.focused": "メモリ目標: フォーカス時",
+                "mem.unfocused": "メモリ目標: 非フォーカス時",
+                "mem.minimized": "メモリ目標: 最小化時",
+                "mem.hint": "Low はメモリを抑えますが、復帰時に重くなることがあります。"
             }
         };
 
-        const fields = ["clearCacheOnNavigation", "clearCacheOnChannelChange", "suspendOnMinimize", "lowMemoryOnBlur", "startMinimized", "minimizeToTray", "hardwareAcceleration"];
+        const fields = ["clearCacheOnNavigation", "clearCacheOnChannelChange", "startMinimized", "minimizeToTray", "hardwareAcceleration"];
         const $ = id => document.getElementById(id);
 
         let settings = null;
@@ -331,6 +349,9 @@
             $("language").value = s.language || "auto";
             $("appMode").value = s.appMode || "browser";
             $("screenShare").checked = !!s.screenShare;
+            $("memFocused").value = s.memFocused || "normal";
+            $("memUnfocused").value = s.memUnfocused || "low";
+            $("memMinimized").value = s.memMinimized || "low";
             pttCode = s.pushToTalkCode || "";
             updateZoomLabel();
             applyLanguage();
@@ -349,7 +370,10 @@
                 pushToTalkCode: pttCode,
                 language: $("language").value,
                 appMode: $("appMode").value,
-                screenShare: $("screenShare").checked
+                screenShare: $("screenShare").checked,
+                memFocused: $("memFocused").value,
+                memUnfocused: $("memUnfocused").value,
+                memMinimized: $("memMinimized").value
             };
         }
 
@@ -379,6 +403,9 @@
         });
 
         $("appMode").addEventListener("change", save);
+        $("memFocused").addEventListener("change", save);
+        $("memUnfocused").addEventListener("change", save);
+        $("memMinimized").addEventListener("change", save);
         $("screenShare").addEventListener("change", save);
 
         $("clearNow").addEventListener("click", async () => {
