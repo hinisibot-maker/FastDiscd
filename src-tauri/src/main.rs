@@ -1384,8 +1384,22 @@ const SHARE_JS: &str = r##"
     function installNativeStub() {
         var noop = function () { };
         var promise = function (v) { return Promise.resolve(v); };
-        var anyFn = function () { return undefined; };
-        var anyObj = function () { return new Proxy({}, { get: function () { return anyFn; } }); };
+        var U = (function () {
+            var fn = function () { return U; };
+            U = new Proxy(fn, {
+                get: function (target, prop) {
+                    if (prop === "then") return undefined;
+                    if (prop === Symbol.toPrimitive) return function () { return ""; };
+                    if (prop === "toString" || prop === "valueOf") return function () { return ""; };
+                    if (prop === "toJSON") return function () { return null; };
+                    return U;
+                },
+                apply: function () { return U; },
+                construct: function () { return U; }
+            });
+            return U;
+        })();
+        var anyFn = function () { return U; };
 
         function mod(extra) {
             var base = Object.assign({
@@ -1399,6 +1413,9 @@ const SHARE_JS: &str = r##"
                     if (!seen[name] && Object.keys(seen).length < 200) {
                         seen[name] = true;
                         try { invoke("js_guard_error", { message: "native-access:" + name }); } catch (e) { }
+                    }
+                    if (/^(get|ensure|is|has|set|check|request|fetch|load|start|stop|enable|disable)/i.test(name)) {
+                        return function () { return Promise.resolve(undefined); };
                     }
                     return anyFn;
                 }
@@ -1414,9 +1431,10 @@ const SHARE_JS: &str = r##"
             getArch: function () { return "x64"; },
             getPath: function () { return ""; },
             appArch: function () { return "x64"; },
+            getPreferredSystemLanguages: function () { return promise(["ja-JP", "en-US"]); },
             requireModule: function () { return {}; },
             getModuleVersions: function () { return {}; },
-            setMemoryInformation: noop,
+            setMemoryInformation: function () { return promise(); },
             setDevtoolsCallbacks: noop,
             relaunch: noop,
             setBadge: noop
@@ -1425,7 +1443,17 @@ const SHARE_JS: &str = r##"
             isRenderer: true,
             setUncaughtExceptionHandler: noop,
             nativeModules: mod({ require: function () { return {}; }, setGameCandidateOverrides: noop }),
-            process: mod({ platform: "win32", arch: "x64", type: "renderer", env: {}, versions: { electron: "42.7.1", chrome: "141.0.0.0", node: "22.14.0" } }),
+            process: mod({
+                platform: "win32", arch: "x64", type: "renderer", env: {},
+                versions: { electron: "42.7.1", chrome: "141.0.0.0", node: "22.14.0" },
+                appArch: function () { return "x64"; },
+                getPreferredSystemLanguages: function () { return promise(["ja-JP", "en-US"]); },
+                requireModule: function () { return {}; },
+                getModuleVersions: function () { return {}; },
+                setMemoryInformation: function () { return promise(); },
+                setDevtoolsCallbacks: noop,
+                getSystemIdleTimeMs: function () { return 0; }
+            }),
             os: mod({ platform: "win32", arch: "x64", release: "10.0.22631", type: "Windows_NT", version: "10.0.22631", homedir: function () { return ""; } }),
             app: app,
             clipboard: mod({ copy: noop, read: function () { return ""; } }),
@@ -1476,7 +1504,12 @@ const SHARE_JS: &str = r##"
             sysimg: mod({})
         };
 
-        window.DiscordNative = api;
+        window.DiscordNative = new Proxy(api, {
+            get: function (target, prop) {
+                if (prop in target) return target[prop];
+                return U;
+            }
+        });
         try { window.popouts = new Map(); } catch (e) { }
     }
     function installCapture() {
