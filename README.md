@@ -1,178 +1,177 @@
 # FastDiscd
 
-Discord の Electron クライアントを、**Rust + Windows 標準の WebView2** で包み直した軽量デスクトップクライアントです。
+A lightweight desktop client for Discord, built with **Rust + Windows' built-in WebView2**.
 
 ![FastDiscd](docs/icon.png)
 
-> **⚠️ 重要（必ずお読みください）**
+> **⚠️ IMPORTANT — please read**
 >
-> - 本アプリは **Discord Inc. とは一切関係のない非公式クライアント**です。
-> - **Discord の利用規約（ToS）に違反する可能性があります。** 利用は**完全に自己責任**でお願いします。
-> - **現在はベータ版**です。予告なく仕様変更・配布終了する場合があります。
-> - **対応 OS は Windows のみ**（Windows 10/11 x64）です。
+> - This is an **unofficial client, not affiliated with Discord Inc.** in any way.
+> - Using it **may violate Discord's Terms of Service. Use entirely at your own risk.**
+> - This is a **beta release**. Features and distribution may change without notice.
+> - **Windows only** (Windows 10/11 x64).
 
 ---
 
-## スクリーンショット
+## Screenshots
 
-| 設定画面（トレイ → 設定...） |
+| Settings window (tray → Settings...) |
 | --- |
-| ![設定画面](docs/settings.png) |
+| ![Settings](docs/settings.png) |
 
 ---
 
-## Discord 機能の対応状況
+## Feature support
 
-| 機能 | 状態 | 説明 |
+| Feature | Status | Notes |
 | --- | --- | --- |
-| UI・レイアウト | ✅ 完全 | Discord 公式 Web をそのまま表示（独自 UI なし） |
-| メッセージ送受信 | ✅ 完全 | Discord Web の Gateway(WebSocket) / REST をそのまま使用 |
-| 画像・GIF・スタンプ・絵文字 | ✅ 完全 | WebView2 が描画 |
-| ボイスチャット | ✅ 動作 | WebRTC。マイク権限は自動許可。Discord の音声設定もそのまま |
-| 通知 | ✅ 動作 | WebView2 の Windows トースト経由（権限自動許可） |
-| プッシュトゥトーク | ✅ 強化 | **グローバル対応**。別ウィンドウを見ていても送話できる（Rust 側でキー監視） |
-| 画面共有 | ❌ 不可 | WebView2 の制約（`getDisplayMedia` のピッカー UI が無い） |
-| グローバルホットキー（ミュート等） | △ 一部 | PTT は対応。他のアクションは今後の対応 |
-| 拡大率 | ✅ 代替実装 | Discord Web には無いため、アプリ独自の拡大率設定で代替 |
-| 起動時の動作 / トレイ格納 | ✅ 完全 | 自動起動・最小化起動・トレイ格納・GPU切替を実装 |
-| リッチプレゼンス / ゲーム検出 | ❌ 不可 | `DiscordNative` 依存のため |
-| 自動更新 | — | Discord Web 側は常に最新。アプリは手動更新 |
+| UI / layout | ✅ Full | Discord's official web app rendered as-is (no custom UI) |
+| Sending / receiving messages | ✅ Full | Uses Discord Web's own Gateway (WebSocket) and REST |
+| Images, GIFs, stickers, emoji | ✅ Full | Rendered by WebView2 |
+| Voice chat | ✅ Works | WebRTC; microphone permission auto-granted; Discord's voice settings apply |
+| Notifications | ✅ Works | Windows toast notifications via WebView2 (permission auto-granted) |
+| Push-to-talk | ✅ Enhanced | **Works globally** — talking works even when another window is focused (key polling in Rust) |
+| Screen sharing | ❌ Not supported | Limitation of WebView2 (no `getDisplayMedia` picker UI) |
+| Global hotkeys (mute, etc.) | △ Partial | PTT only; other actions planned |
+| Zoom level | ✅ Custom | Discord's web app has no zoom setting, so FastDiscd provides its own |
+| Startup behavior / tray | ✅ Full | Launch at login, start minimized, minimize to tray, GPU toggle |
+| Rich Presence / game detection | ❌ Not supported | Requires `DiscordNative` |
+| Auto-update | — | Discord's web app is always current; the app itself is updated manually |
 
 ---
 
-## メモリ管理システム（FastDiscd の肝）
+## Memory management system
 
-Electron 版は Chromium と Node.js をアプリごとに同梱しますが、FastDiscd は **OS の WebView2 を共有**し、
-Rust 側でメモリの「寝かせ方」を細かく制御しています。
+The Electron client bundles Chromium and Node.js with every app. FastDiscd instead
+**shares the OS WebView2 runtime** and uses Rust to control how aggressively memory is released.
 
-### レイヤー1: 軽量なネイティブシェル
-- Electron / Node.js を同梱しない（Rust バイナリは約 5MB）
-- Chromium は OS の WebView2 ランタイムを共有（アプリごとに持たない）
+### Layer 1 — Minimal native shell
+- No bundled Electron or Node.js (the Rust binary is ~5 MB)
+- Chromium is shared through the system WebView2 runtime
 
-### レイヤー2: フォーカス連動のメモリ目標制御
-- ウィンドウが**非フォーカス**または**最小化**された瞬間に
-  `ICoreWebView2_19::SetMemoryUsageTargetLevel(Low)` を発行
-- フォーカスが戻ると `Normal` に戻す
-- Chromium に「今は省メモリで動け」と明示的に指示できる公式 API
+### Layer 2 — Focus-aware memory target
+- The moment the window becomes **unfocused or minimized**, FastDiscd calls
+  `ICoreWebView2_19::SetMemoryUsageTargetLevel(Low)`
+- Restores `Normal` when focus returns
+- This is an official API that tells Chromium to operate in a low-memory mode
 
-### レイヤー3: バックグラウンドスロットリング
-- Tauri の `background_throttling = Suspend`
-- 非表示状態ではレンダラのタスクを停止し、CPU とメモリの消費を抑制
+### Layer 3 — Background throttling
+- Tauri's `background_throttling = Suspend`
+- Renderer tasks stop while hidden, reducing both CPU and memory use
 
-### レイヤー4: ページ・チャンネル切替時のキャッシュ破棄
-- ページ読み込み完了時に HTTP ディスクキャッシュを削除（`ClearBrowsingData(DISK_CACHE)`）
-- **チャンネル切替**（SPA のルート変更）を検知して、旧ページのキャッシュを破棄
-- 同時に V8 ヒープの GC を強制（`HeapProfiler.collectGarbage`）し、前チャンネルのメッセージを解放
-- すべて設定で ON/OFF 可能
+### Layer 4 — Cache purging on page / channel changes
+- Clears the HTTP disk cache on every page load (`ClearBrowsingData(DISK_CACHE)`)
+- Detects **channel switches** (SPA route changes) and discards the previous page's cache
+- Forces a V8 heap GC (`HeapProfiler.collectGarbage`) so the previous channel's messages are released
+- Every part can be toggled in the settings
 
-### レイヤー5: ウィンドウ1枚を使い回す
-- 新しいウィンドウを都度生成せず、WebView2 のプロファイルとプロセスを共有
-- 設定ウィンドウは起動時に**非表示で事前生成**し、トレイから一瞬で開けるようにしている
+### Layer 5 — Reuse a single window
+- No new windows per action; the WebView2 profile and processes are shared
+- The settings window is **pre-created hidden at startup**, so it opens instantly from the tray
 
-### 実測値（この PC / Windows 11 / ログイン済み）
+### Measured results (this PC / Windows 11 / logged in)
 
-| 状態 | 合計メモリ |
+| State | Total memory |
 | --- | --- |
-| **非フォーカス時（他ウィンドウ操作中）** | **約 107MB** |
-| **フォーカス時（通常利用）** | **約 414MB** |
-| 参考: Discord 公式 Electron 版 | 約 1,000〜1,500MB |
+| **Unfocused (working in another window)** | **~107 MB** |
+| **Focused (normal use)** | **~414 MB** |
+| Reference: official Discord (Electron) | ~1,000–1,500 MB |
 
-**非フォーカス時（107.1MB）の内訳**
+**Unfocused (107.1 MB) breakdown**
 
-![非フォーカス時のメモリ](docs/memory-idle.png)
+![Memory while unfocused](docs/memory-idle.png)
 
-| プロセス | 使用量 |
+| Process | Usage |
 | --- | --- |
-| WebView2 (1) Discord | 72.6MB |
-| WebView2 マネージャー | 15.6MB |
-| WebView2 GPU プロセス | 8.7MB |
-| Network Service | 5.8MB |
-| Crashpad | 2.0MB |
-| Audio Service | 1.8MB |
-| Storage Service | 0.7MB |
+| WebView2 (1) Discord | 72.6 MB |
+| WebView2 manager | 15.6 MB |
+| WebView2 GPU process | 8.7 MB |
+| Network Service | 5.8 MB |
+| Crashpad | 2.0 MB |
+| Audio Service | 1.8 MB |
+| Storage Service | 0.7 MB |
 
-**フォーカス時（414.4MB）の内訳**
+**Focused (414.4 MB) breakdown**
 
-![フォーカス時のメモリ](docs/memory-focused.png)
+![Memory while focused](docs/memory-focused.png)
 
-| プロセス | 使用量 |
+| Process | Usage |
 | --- | --- |
-| WebView2 (1) Discord | 294.7MB |
-| GPU プロセス | 75.9MB |
-| WebView2 マネージャー | 25.4MB |
-| Network Service | 13.7MB |
-| Crashpad | 2.0MB |
-| Audio Service | 1.3MB |
-| Storage Service | 1.3MB |
+| WebView2 (1) Discord | 294.7 MB |
+| GPU process | 75.9 MB |
+| WebView2 manager | 25.4 MB |
+| Network Service | 13.7 MB |
+| Crashpad | 2.0 MB |
+| Audio Service | 1.3 MB |
+| Storage Service | 1.3 MB |
 
-> 非フォーカス時にここまで下がるのは、メモリ目標の Low 化とバックグラウンド制御、
-> キャッシュ破棄を組み合わせているためです。Discord を「使っていないときは寝かせる」設計です。
+> Memory drops this far when unfocused because the low memory target, background throttling,
+> and cache purging work together. In short: Discord is put to sleep when you are not using it.
 
 ---
 
-## インストール
+## Installation
 
-1. [Releases](../../releases) から `FastDiscd_0.1.0_x64-setup.exe` をダウンロード
-2. 実行（管理者権限が必要です。`Program Files\FastDiscd` にインストールされます）
-3. デスクトップ / スタートメニューの **FastDiscd** から起動
+1. Download `FastDiscd_0.1.0_x64-setup.exe` from [Releases](../../releases)
+2. Run it (administrator rights required; installs to `Program Files\FastDiscd`)
+3. Launch **FastDiscd** from the desktop or Start menu
 
-初回起動時に Discord にログインしてください。以降は自動ログインします。
+Log in to Discord on first launch. You will stay logged in afterwards.
 
-## 設定方法
+## Settings
 
-タスクトレイの **FastDiscd アイコンを右クリック →「設定...」** で設定ウィンドウが開きます。
-（左クリックでメインウィンドウを復帰）
+**Right-click the FastDiscd icon in the system tray → "Settings..."** (left-click restores the main window).
 
-| 項目 | 説明 |
+| Option | Description |
 |---|---|
-| ページ読み込み時にキャッシュを削除 | ページ遷移時に HTTP キャッシュを破棄 |
-| チャンネル切替時に前ページのキャッシュを削除 | チャンネルを変えたとき旧ページのキャッシュを破棄（GC も実行） |
-| 最小化時にメモリを解放 | 最小化中は WebView2 を省メモリ状態にする |
-| 非フォーカス時にメモリ目標を Low にする | 他ウィンドウ操作中に省メモリ指示 |
-| プッシュトゥトーク（グローバル） | Discord 側と同じキーを登録すると、別ウィンドウでも送話できる |
-| Windows 起動時に自動で開く | HKCU の Run に登録 |
-| 起動時は最小化して開始 | 次回起動から反映 |
-| 最小化時にタスクトレイへ格納 | トレイアイコン左クリックで復帰 |
-| ハードウェアアクセラレーション | オフは再起動後に反映 |
-| 拡大率 | Discord Web 側に拡大率設定が無いための代替 |
+| Clear cache on page load | Drops the HTTP cache whenever a page loads |
+| Clear previous page cache on channel switch | Discards the old channel's cache (and runs GC) |
+| Free memory when minimized | Puts WebView2 into a low-memory state while minimized |
+| Low memory target when unfocused | Requests low-memory mode while another window is active |
+| Push-to-talk (global) | Register the same key as Discord to talk while another window is focused |
+| Launch at Windows startup | Registers an HKCU Run entry |
+| Start minimized | Takes effect on the next launch |
+| Minimize to tray | Restore by left-clicking the tray icon |
+| Hardware acceleration | Takes effect after a restart |
+| Zoom level | Substitute for Discord's unavailable zoom setting |
 
-## ビルド
+## Building
 
-必要なもの:
+Requirements:
 
-- Rust（stable-msvc）
-- Visual Studio Build Tools（C++ ワークロード）
+- Rust (stable-msvc)
+- Visual Studio Build Tools (C++ workload)
 - Node.js + pnpm
-- WebView2 ランタイム（Windows 11 は標準）
+- WebView2 Runtime (included in Windows 11)
 
 ```powershell
 pnpm install
 pnpm tauri build
-# インストーラ: src-tauri/target/release/bundle/nsis/FastDiscd_0.1.0_x64-setup.exe
+# Installer: src-tauri/target/release/bundle/nsis/FastDiscd_0.1.0_x64-setup.exe
 ```
 
-## データの場所
+## Data location
 
 ```
 %LOCALAPPDATA%\FastDiscd
- ├─ EBWebView\     ログイン情報・Cookie
- ├─ config.json    設定
- └─ fastdiscd.log  動作ログ
+ ├─ EBWebView\     login session / cookies
+ ├─ config.json    settings
+ └─ fastdiscd.log  runtime log
 ```
 
-## 既知の制限
+## Known limitations
 
-- 画面共有は WebView2 の制約で不可
-- Discord の一部設定（`DiscordNative` 依存の項目）は Web 側に存在しないため、本アプリ独自の設定で代替
-- タスクマネージャー上の WebView2 子プロセスのアイコンは Edge/WebView2 ランタイムのもので、変更できません
+- Screen sharing is not possible due to WebView2 limitations
+- Some Discord settings (anything `DiscordNative`-dependent) do not exist on the web, so FastDiscd provides its own substitutes
+- The icons of WebView2 child processes in Task Manager belong to the Edge/WebView2 runtime and cannot be changed
 
-## 免責
+## Disclaimer
 
-本ソフトウェアは現状のまま提供され、いかなる保証もありません。
-利用により発生した損害・アカウント停止等について、作者は一切責任を負いません。
-Discord の利用規約を確認のうえ、自己責任でご利用ください。
+This software is provided "as is", without warranty of any kind.
+The author is not responsible for any damage or account suspension resulting from its use.
+Please review Discord's Terms of Service and use at your own risk.
 
-## ライセンス
+## License
 
-MIT（`LICENSE` 参照）。Discord の名称・ロゴは Discord Inc. の商標です。
-詳細は [docs/LEGAL.md](docs/LEGAL.md) を参照してください。
+MIT (see `LICENSE`). "Discord" and its logo are trademarks of Discord Inc.
+See [docs/LEGAL.md](docs/LEGAL.md) for details.
