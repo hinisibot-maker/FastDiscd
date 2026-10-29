@@ -125,6 +125,7 @@ fn main() {
             get_discord_locale,
             capture_start,
             request_jpeg_fallback,
+            selected_size,
             capture_stop,
             js_guard_error,
             window_minimize,
@@ -1588,6 +1589,16 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
     true
 }
 #[tauri::command]
+fn selected_size() -> (i32, i32) {
+    SELECTED_SOURCE
+        .lock()
+        .ok()
+        .and_then(|s| *s)
+        .map(|(_, _, w, h)| (w, h))
+        .unwrap_or((1280, 720))
+}
+
+#[tauri::command]
 fn request_jpeg_fallback() {
     FORCE_JPEG.store(true, std::sync::atomic::Ordering::SeqCst);
     *ENCODER.lock().unwrap() = None;
@@ -1604,6 +1615,7 @@ fn capture_start(app: AppHandle) -> bool {
         let _ = control.stop();
         log("previous capture stopped for restart");
     }
+    *ENCODER.lock().unwrap() = None;
     let gen = CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst);
     let window = *SELECTED_WINDOW.lock().unwrap();
     if let Some(hwnd) = window {
@@ -2544,6 +2556,27 @@ const SHARE_JS: &str = r##"
         var h264Chunks = 0;
         var fallbackTimer = null;
 
+        // 共有のたびに比率・デコーダ状態をリセットする
+        function resetCanvas(w, h) {
+            canvas.width = w > 0 ? w : 1280;
+            canvas.height = h > 0 ? h : 720;
+            ctx = canvas.getContext("2d");
+            h264Configured = false;
+            decodedWidth = 0;
+            decodedHeight = 0;
+            h264Frames = 0;
+            h264Chunks = 0;
+            usingH264 = false;
+            if (fallbackTimer) {
+                clearTimeout(fallbackTimer);
+                fallbackTimer = null;
+            }
+            if (decoder) {
+                try { decoder.close(); } catch (e) { }
+                decoder = null;
+            }
+        }
+
         function b64ToBytes(b64) {
             var bin = atob(b64);
             var len = bin.length;
@@ -2712,7 +2745,10 @@ const SHARE_JS: &str = r##"
                         });
                     }).then(function (picked) {
                         if (picked === false) { throw new Error("capture cancelled"); }
-                        return ensure();
+                        return invoke("selected_size").then(function (sz) {
+                            resetCanvas(sz && sz[0] ? sz[0] : 1280, sz && sz[1] ? sz[1] : 720);
+                            return ensure();
+                        });
                     }).then(function () {
                     var stream = canvas.captureStream(30);
                         var track = stream.getVideoTracks()[0];

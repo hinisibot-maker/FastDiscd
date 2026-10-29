@@ -44,6 +44,7 @@ commands.allow = [
     "capture_stop",
     "js_guard_error",
     "request_jpeg_fallback",
+    "selected_size",
     "list_sources",
     "show_source_picker",
     "select_source",
