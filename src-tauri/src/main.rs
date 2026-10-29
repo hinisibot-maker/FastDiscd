@@ -961,7 +961,7 @@ fn show_source_picker(app: AppHandle) {
         let _ = window.set_focus();
         return;
     }
-    let _ = WebviewWindowBuilder::new(&app, "picker", WebviewUrl::App("picker.html".into()))
+    let built = WebviewWindowBuilder::new(&app, "picker", WebviewUrl::App("picker.html".into()))
         .title("配信する画面を選択")
         .inner_size(720.0, 620.0)
         .resizable(true)
@@ -970,6 +970,15 @@ fn show_source_picker(app: AppHandle) {
         .background_color(tauri::utils::config::Color(30, 31, 34, 255))
         .center()
         .build();
+    match built {
+        Ok(window) => {
+            let _ = window.show();
+            let _ = window.set_focus();
+            let _ = window.set_always_on_top(true);
+            log("picker window created");
+        }
+        Err(e) => log(&format!("picker window error: {e}")),
+    }
 }
 
 #[tauri::command]
