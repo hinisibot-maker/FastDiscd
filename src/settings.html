@@ -133,6 +133,24 @@
                 <option value="browser" data-i18n="shareMode.browser"></option>
             </select>
         </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="codec.label"></span>
+                <div class="hint" data-i18n="codec.hint"></div>
+            </div>
+            <select id="screenShareCodec">
+                <option value="auto" data-i18n="codec.auto"></option>
+                <option value="h264" data-i18n="codec.h264"></option>
+                <option value="jpeg" data-i18n="codec.jpeg"></option>
+            </select>
+        </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="bitrate.label"></span>
+                <div class="hint" data-i18n="bitrate.hint"></div>
+            </div>
+            <input type="number" id="screenShareBitrateKbps" min="500" max="30000" step="500" />
+        </div>
     </div>
     <div class="group">
         <div class="row">
@@ -303,6 +321,13 @@
                 "shareMode.label": "Capture method",
                 "shareMode.hint": "Rust capture is the default. Browser uses Discord/web native capture (may not work in WebView2).",
                 "shareMode.rust": "Rust capture (recommended)",
+                "codec.label": "Stream codec",
+                "codec.hint": "H.264 uses Media Foundation (hardware if available). JPEG is the legacy path.",
+                "codec.auto": "Auto (H.264)",
+                "codec.h264": "H.264",
+                "codec.jpeg": "JPEG (legacy)",
+                "bitrate.label": "Bitrate (kbps)",
+                "bitrate.hint": "Used by H.264 encoding. 6000 is a good default for 1080p30.",
                 "shareMode.browser": "Browser (native)",
                 "mem.focused": "Memory target: focused",
                 "mem.unfocused": "Memory target: unfocused",
@@ -354,6 +379,13 @@
                 "shareMode.label": "キャプチャ方式",
                 "shareMode.hint": "Rust（独自）が既定です。ブラウザはDiscord標準のキャプチャを使います（WebView2では動かない場合があります）。",
                 "shareMode.rust": "Rust（推奨）",
+                "codec.label": "配信コーデック",
+                "codec.hint": "H.264はMedia Foundationを使用します（対応していればハードウェア）。JPEGは従来方式です。",
+                "codec.auto": "自動（H.264）",
+                "codec.h264": "H.264",
+                "codec.jpeg": "JPEG（従来）",
+                "bitrate.label": "ビットレート（kbps）",
+                "bitrate.hint": "H.264エンコードで使用します。1080p30なら6000が目安です。",
                 "shareMode.browser": "ブラウザ（標準）",
                 "mem.focused": "メモリ目標: フォーカス時",
                 "mem.unfocused": "メモリ目標: 非フォーカス時",
@@ -404,6 +436,8 @@
             $("language").value = s.language || "auto";
             $("screenShare").checked = !!s.screenShare;
             $("screenShareMode").value = s.screenShareMode || "rust";
+            $("screenShareCodec").value = s.screenShareCodec || "auto";
+            $("screenShareBitrateKbps").value = s.screenShareBitrateKbps || 6000;
             var customName = s.customMemoryName || "Custom";
             ["memFocused", "memUnfocused", "memMinimized"].forEach(function (id) {
                 var sel = $(id);
@@ -434,6 +468,8 @@
                 language: $("language").value,
                 screenShare: $("screenShare").checked,
                 screenShareMode: $("screenShareMode").value,
+                screenShareCodec: $("screenShareCodec").value,
+                screenShareBitrateKbps: Number($("screenShareBitrateKbps").value) || 6000,
                 memFocused: $("memFocused").value,
                 memUnfocused: $("memUnfocused").value,
                 memMinimized: $("memMinimized").value
@@ -492,6 +528,8 @@
         });
         $("screenShare").addEventListener("change", save);
         $("screenShareMode").addEventListener("change", save);
+        $("screenShareCodec").addEventListener("change", save);
+        $("screenShareBitrateKbps").addEventListener("change", save);
 
         $("clearNow").addEventListener("click", async () => {
             await invoke("clear_cache_now");

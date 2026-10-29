@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::utils::config::BackgroundThrottlingPolicy;
+mod encoder;
+
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// Discord の Web クライアント。UI も通信（Gateway / REST）も公式 Web のものをそのまま使う。
@@ -53,6 +55,12 @@ struct Config {
     screen_share_mode: String,
     /// チャンネル切替時にページを再読み込みしてメモリを解放する
     reload_on_channel_switch: bool,
+    /// 配信コーデック: "auto" / "h264" / "jpeg"
+    screen_share_codec: String,
+    /// 配信ビットレート（kbps）
+    screen_share_bitrate_kbps: u32,
+    /// 配信の最大fps
+    screen_share_max_fps: u32,
 }
 
 impl Default for Config {
@@ -72,6 +80,9 @@ impl Default for Config {
             screen_share: false,
             screen_share_mode: "rust".to_string(),
             reload_on_channel_switch: false,
+            screen_share_codec: "auto".to_string(),
+            screen_share_bitrate_kbps: 6000,
+            screen_share_max_fps: 30,
         }
     }
 }
@@ -81,6 +92,7 @@ static LAST_PATH: OnceLock<Mutex<String>> = OnceLock::new();
 static DISCORD_LOCALE: OnceLock<Mutex<String>> = OnceLock::new();
 static SELECTED_SOURCE: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sync::Mutex::new(None);
 static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ENCODER: std::sync::Mutex<Option<encoder::H264Encoder>> = std::sync::Mutex::new(None);
 static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -184,6 +196,30 @@ fn main() {
                     .build();
             }
 
+            if std::env::var_os("RUSTCORD_TEST_ENCODER").is_some() {
+                std::thread::spawn(|| {
+                    let (w, h) = (1280usize, 720usize);
+                    match encoder::H264Encoder::create(w as i32, h as i32, 30, 6000) {
+                        Some(mut enc) => {
+                            log(&format!("encoder selected: {} (hw={})", enc.info.name, enc.info.hardware));
+                            let mut nv12 = vec![0u8; w * h * 3 / 2];
+                            for i in 0..90u32 {
+                                for y in 0..h {
+                                    for x in 0..w {
+                                        nv12[y * w + x] = ((x as u32 + i * 3) % 256) as u8;
+                                    }
+                                }
+                                let out = enc.encode(&nv12, i == 0);
+                                let bytes: usize = out.iter().map(|v| v.len()).sum();
+                                if i < 3 || i % 30 == 0 {
+                                    log(&format!("enc frame {i} out={bytes}B chunks={}", out.len()));
+                                }
+                            }
+                        }
+                        None => log("encoder: none available"),
+                    }
+                });
+            }
             if let Ok(h) = std::env::var("RUSTCORD_TEST_WGC_WINDOW") {
                 if let Ok(hwnd) = h.parse::<isize>() {
                     CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1369,6 +1405,7 @@ fn capture_start(app: AppHandle) -> bool {
 #[tauri::command]
 fn capture_stop() {
     CAPTURING.store(false, std::sync::atomic::Ordering::SeqCst);
+    *ENCODER.lock().unwrap() = None;
     if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
         let _ = control.stop();
         log("wgc session stopped");
@@ -1394,9 +1431,42 @@ type WgcError = Box<dyn std::error::Error + Send + Sync>;
 static WGC_CONTROL: std::sync::Mutex<Option<windows_capture::capture::CaptureControl<WgcHandler, WgcError>>> =
     std::sync::Mutex::new(None);
 
+#[derive(Clone, serde::Serialize)]
+struct H264Chunk {
+    seq: u64,
+    key: bool,
+    width: i32,
+    height: i32,
+    data: String,
+}
+
+fn is_keyframe(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 4 < data.len() {
+        if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+            let nal = data[i + 3] & 0x1f;
+            if nal == 5 || nal == 7 {
+                return true;
+            }
+            i += 3;
+        } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
+            let nal = data[i + 4] & 0x1f;
+            if nal == 5 || nal == 7 {
+                return true;
+            }
+            i += 4;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 struct WgcHandler {
     app: AppHandle,
     frames: u64,
+    seq: u64,
+    first: bool,
 }
 
 impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
@@ -1404,7 +1474,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     fn new(ctx: windows_capture::capture::Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self { app: ctx.flags, frames: 0 })
+        Ok(Self { app: ctx.flags, frames: 0, seq: 0, first: true })
     }
 
     fn on_frame_arrived(
@@ -1415,14 +1485,69 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
         if !CAPTURING.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(());
         }
-        let width = frame.width();
-        let height = frame.height();
+        let width = frame.width() as i32;
+        let height = frame.height() as i32;
         let mut buffer = frame.buffer()?;
         let data = buffer.as_nopadding_buffer()?;
+
+        let cfg = config();
+        let want_h264 = cfg.screen_share_codec != "jpeg";
+
+        if want_h264 {
+            let mut guard = ENCODER.lock().unwrap();
+            if guard.is_none() {
+                match encoder::H264Encoder::create(
+                    width,
+                    height,
+                    cfg.screen_share_max_fps.max(5),
+                    cfg.screen_share_bitrate_kbps.max(500),
+                ) {
+                    Some(enc) => {
+                        log(&format!(
+                            "h264 encoder: {} (hw={})",
+                            enc.info.name, enc.info.hardware
+                        ));
+                        *guard = Some(enc);
+                    }
+                    None => log("h264 encoder unavailable, falling back to JPEG"),
+                }
+            }
+            if let Some(enc) = guard.as_mut() {
+                if enc.width() != width || enc.height() != height {
+                    if !enc.reconfigure(width, height, cfg.screen_share_bitrate_kbps.max(500)) {
+                        log("h264 reconfigure failed, recreating encoder");
+                        *guard = None;
+                    }
+                }
+            }
+            if let Some(enc) = guard.as_mut() {
+                let nv12 = encoder::bgra_to_nv12(data, width as usize, height as usize);
+                let chunks = enc.encode(&nv12, self.first || self.frames % 120 == 0);
+                self.first = false;
+                self.frames += 1;
+                for chunk in chunks {
+                    let key = is_keyframe(&chunk);
+                    let payload = H264Chunk {
+                        seq: self.seq,
+                        key,
+                        width,
+                        height,
+                        data: base64::engine::general_purpose::STANDARD.encode(chunk),
+                    };
+                    self.seq += 1;
+                    let _ = self.app.emit("fastdisc://h264", payload);
+                }
+                if self.frames == 1 || self.frames % 120 == 0 {
+                    log(&format!("h264 frames={} {}x{}", self.frames, width, height));
+                }
+                return Ok(());
+            }
+        }
+
         let rgb: Vec<u8> = data.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
         let mut out = Vec::new();
         let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70);
-        enc.encode(&rgb, width, height, image::ExtendedColorType::Rgb8)?;
+        enc.encode(&rgb, width as u32, height as u32, image::ExtendedColorType::Rgb8)?;
         let payload = base64::engine::general_purpose::STANDARD.encode(out);
         let _ = self.app.emit("fastdisc://frame", payload);
         self.frames += 1;
@@ -1439,7 +1564,6 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
         Ok(())
     }
 }
-
 fn start_wgc_capture(app: AppHandle, monitor_index: usize) -> bool {
     use windows_capture::capture::GraphicsCaptureApiHandler;
     use windows_capture::monitor::Monitor;
@@ -1463,7 +1587,7 @@ fn start_wgc_capture(app: AppHandle, monitor_index: usize) -> bool {
         SecondaryWindowSettings::Default,
         MinimumUpdateIntervalSettings::Custom(Duration::from_millis(16)),
         DirtyRegionSettings::Default,
-        ColorFormat::Rgba8,
+        ColorFormat::Bgra8,
         app,
     );
     if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
@@ -1503,7 +1627,7 @@ fn start_wgc_window_capture(app: AppHandle, hwnd: isize) -> bool {
         SecondaryWindowSettings::Default,
         MinimumUpdateIntervalSettings::Custom(Duration::from_millis(16)),
         DirtyRegionSettings::Default,
-        ColorFormat::Rgba8,
+        ColorFormat::Bgra8,
         app,
     );
     if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
@@ -1947,21 +2071,94 @@ const SHARE_JS: &str = r##"
         var ctx = canvas.getContext("2d");
         var listening = false;
 
+        var decoder = null;
+        var usingH264 = false;
+        var decodedWidth = 0;
+        var decodedHeight = 0;
+
+        function b64ToBytes(b64) {
+            var bin = atob(b64);
+            var len = bin.length;
+            var bytes = new Uint8Array(len);
+            for (var i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+            return bytes;
+        }
+
+        function setupH264() {
+            if (decoder) return true;
+            if (!window.VideoDecoder || !window.EncodedVideoChunk) return false;
+            try {
+                decoder = new VideoDecoder({
+                    output: function (frame) {
+                        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+                            canvas.width = frame.displayWidth;
+                            canvas.height = frame.displayHeight;
+                        }
+                        ctx.drawImage(frame, 0, 0);
+                        frame.close();
+                    },
+                    error: function (e) {
+                        guard("h264 decoder: " + ((e && e.message) || e));
+                        decoder = null;
+                        usingH264 = false;
+                    }
+                });
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
         var listenerReady = null;
         function ensure() {
             if (!listenerReady) {
                 listening = true;
-                listenerReady = tauri.event.listen("fastdisc://frame", function (event) {
-                    var img = new Image();
-                    img.onload = function () {
-                    if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-                        canvas.width = img.naturalWidth;
-                        canvas.height = img.naturalHeight;
-                    }
-                    ctx.drawImage(img, 0, 0);
-                };
-                    img.src = "data:image/jpeg;base64," + event.payload;
-                });
+                listenerReady = Promise.all([
+                    tauri.event.listen("fastdisc://frame", function (event) {
+                        var img = new Image();
+                        img.onload = function () {
+                            if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+                                canvas.width = img.naturalWidth;
+                                canvas.height = img.naturalHeight;
+                            }
+                            ctx.drawImage(img, 0, 0);
+                        };
+                        img.src = "data:image/jpeg;base64," + event.payload;
+                    }),
+                    tauri.event.listen("fastdisc://h264", function (event) {
+                        var p = event.payload;
+                        if (!usingH264) {
+                            if (!setupH264()) return;
+                            usingH264 = true;
+                        }
+                        if (!decoder) return;
+                        try {
+                            if (decoder.state !== "configured" || decodedWidth !== p.width || decodedHeight !== p.height) {
+                                if (decoder.state === "configured") {
+                                    decoder.close();
+                                    decoder = null;
+                                    if (!setupH264()) return;
+                                }
+                                decodedWidth = p.width;
+                                decodedHeight = p.height;
+                                decoder.configure({
+                                    codec: "avc1.42E01E",
+                                    codedWidth: p.width,
+                                    codedHeight: p.height,
+                                    avc: { format: "annexb" },
+                                    optimizeForLatency: true
+                                });
+                            }
+                            decoder.decode(new EncodedVideoChunk({
+                                type: p.key ? "key" : "delta",
+                                timestamp: performance.now() * 1000,
+                                data: b64ToBytes(p.data)
+                            }));
+                        } catch (e) {
+                            guard("h264 decode: " + ((e && e.message) || e));
+                        }
+                    })
+                ]);
             }
             // 何回目の共有でも必ずキャプチャを（再）開始する
             return Promise.resolve(listenerReady).then(function () { return invoke("capture_start"); });
