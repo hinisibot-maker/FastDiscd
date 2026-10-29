@@ -95,6 +95,8 @@ static MAIN_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsiz
 static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static ENCODER: std::sync::Mutex<Option<encoder::ActiveEncoder>> = std::sync::Mutex::new(None);
 static FORCE_JPEG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LAST_RAW_FRAME: std::sync::Mutex<Option<(Vec<u8>, i32, i32)>> = std::sync::Mutex::new(None);
+static LAST_H264_KEY: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
 static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -126,6 +128,7 @@ fn main() {
             capture_start,
             request_jpeg_fallback,
             selected_size,
+            probe_save,
             capture_stop,
             js_guard_error,
             window_minimize,
@@ -242,7 +245,27 @@ fn main() {
                 let gen = CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst);
                 start_self_capture(app.handle().clone(), gen);
             }
+            if std::env::var_os("RUSTCORD_TEST_PROBE").is_some() {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(6));
+                    let _ = handle.emit("fastdisc://probe-request", ());
+                    log("probe requested (test)");
+                });
+            }
+
             if std::env::var_os("RUSTCORD_TEST_WGC").is_some() {
+                let (sw, sh) = unsafe {
+                    (
+                        windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+                            windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN,
+                        ),
+                        windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+                            windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN,
+                        ),
+                    )
+                };
+                *SELECTED_SOURCE.lock().unwrap() = Some((0, 0, sw, sh));
                 *SELECTED_MONITOR.lock().unwrap() = Some(0);
                 CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = start_wgc_capture(app.handle().clone(), 0);
@@ -585,11 +608,13 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let settings_item = MenuItem::with_id(app, "settings", if ja { "設定..." } else { "Settings..." }, true, None::<&str>)?;
     let clear_item =
         MenuItem::with_id(app, "clear_now", if ja { "キャッシュを今すぐ削除" } else { "Clear cache now" }, true, None::<&str>)?;
+    let probe_item =
+        MenuItem::with_id(app, "color_probe", if ja { "色検証（キャプチャ）" } else { "Color probe" }, true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", if ja { "終了" } else { "Quit" }, true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
 
-    let items: [&dyn tauri::menu::IsMenuItem<tauri::Wry>; 4] =
-        [&settings_item, &clear_item, &separator, &quit_item];
+    let items: [&dyn tauri::menu::IsMenuItem<tauri::Wry>; 5] =
+        [&settings_item, &clear_item, &probe_item, &separator, &quit_item];
     let menu = Menu::with_items(app, &items)?;
 
     let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
@@ -604,6 +629,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "settings" => open_settings(app),
             "clear_now" => clear_cache_for(app),
+            "color_probe" => {
+                let _ = app.emit("fastdisc://probe-request", ());
+                log("color probe requested");
+            }
             "quit" => app.exit(0),
             _ => {}
         })
@@ -1483,6 +1512,196 @@ fn grab_webview_png(app: &AppHandle) -> Option<Vec<u8>> {
 }
 
 /// FastDiscd 自身のウィンドウを WebView2 の描画ごと配信する
+// ---------------------------------------------------------------------------
+// 色検証用: 生フレーム / 画面参照 / 表示中キャンバス を比較
+// ---------------------------------------------------------------------------
+
+fn save_bgra_png(path: &std::path::Path, pixels: &[u8], w: i32, h: i32) -> bool {
+    let mut rgba = Vec::with_capacity(pixels.len());
+    for p in pixels.chunks_exact(4) {
+        rgba.extend_from_slice(&[p[2], p[1], p[0], 255]);
+    }
+    image::save_buffer(path, &rgba, w as u32, h as u32, image::ColorType::Rgba8).is_ok()
+}
+
+fn gdi_capture_bgra(x: i32, y: i32, w: i32, h: i32) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::*;
+    unsafe {
+        if w <= 0 || h <= 0 {
+            return None;
+        }
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let bitmap = CreateCompatibleBitmap(screen, w, h);
+        let old = SelectObject(mem, bitmap.into());
+        let ok = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_ok();
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = w;
+        info.bmiHeader.biHeight = -h;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB.0;
+        let _ = GetDIBits(
+            mem,
+            bitmap,
+            0,
+            h as u32,
+            Some(pixels.as_mut_ptr().cast()),
+            &mut info,
+            DIB_RGB_COLORS,
+        );
+        let _ = SelectObject(mem, old);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(mem);
+        let _ = ReleaseDC(None, screen);
+        if ok { Some(pixels) } else { None }
+    }
+}
+
+fn mean_bgr(pixels: &[u8]) -> [f64; 3] {
+    let mut b = 0f64;
+    let mut g = 0f64;
+    let mut r = 0f64;
+    let mut n = 0f64;
+    for p in pixels.chunks_exact(4).step_by(37) {
+        b += p[0] as f64;
+        g += p[1] as f64;
+        r += p[2] as f64;
+        n += 1.0;
+    }
+    if n == 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+    [b / n, g / n, r / n]
+}
+
+fn mean_abs_diff_bgra(a: &[u8], b: &[u8]) -> [f64; 3] {
+    let mut db = 0f64;
+    let mut dg = 0f64;
+    let mut dr = 0f64;
+    let mut n = 0f64;
+    for (pa, pb) in a.chunks_exact(4).zip(b.chunks_exact(4)).step_by(37) {
+        db += (pa[0] as f64 - pb[0] as f64).abs();
+        dg += (pa[1] as f64 - pb[1] as f64).abs();
+        dr += (pa[2] as f64 - pb[2] as f64).abs();
+        n += 1.0;
+    }
+    if n == 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+    [db / n, dg / n, dr / n]
+}
+
+#[tauri::command]
+fn probe_save(png_base64: String) {
+    let dir = match data_dir() {
+        Some(d) => d.join("probe"),
+        None => return,
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let canvas_bytes = base64::engine::general_purpose::STANDARD
+        .decode(png_base64)
+        .unwrap_or_default();
+    if !canvas_bytes.is_empty() {
+        let _ = std::fs::write(dir.join("canvas.png"), &canvas_bytes);
+    }
+
+    let raw = LAST_RAW_FRAME.lock().ok().and_then(|g| g.clone());
+    let selected = *SELECTED_SOURCE.lock().unwrap();
+    let reference = selected.and_then(|(x, y, w, h)| gdi_capture_bgra(x, y, w, h));
+
+    if let Some((pixels, w, h)) = &raw {
+        let _ = save_bgra_png(&dir.join("raw.png"), pixels, *w, *h);
+        log(&format!("probe raw: {w}x{h} mean_bgr={:?}", mean_bgr(pixels)));
+    } else {
+        log("probe raw: none (not capturing?)");
+    }
+    if let Some(pixels) = &reference {
+        let (w, h) = match selected {
+            Some((_, _, w, h)) => (w, h),
+            None => (0, 0),
+        };
+        let _ = save_bgra_png(&dir.join("reference.png"), pixels, w, h);
+        log(&format!("probe reference: {w}x{h} mean_bgr={:?}", mean_bgr(pixels)));
+        if let (Some((raw_pixels, rw, rh)), Some((_, _, sw, sh))) = (&raw, selected) {
+            if *rw == sw && *rh == sh {
+                log(&format!(
+                    "probe raw_vs_reference diff_bgr={:?}",
+                    mean_abs_diff_bgra(raw_pixels, pixels)
+                ));
+            }
+        }
+    } else {
+        log("probe reference: none");
+    }
+
+    if let Ok(img) = image::load_from_memory(&canvas_bytes) {
+        let rgba = img.to_rgba8();
+        let mut bgra = rgba.into_raw();
+        for p in bgra.chunks_exact_mut(4) {
+            p.swap(0, 2);
+        }
+        let (w, h) = (img.width() as i32, img.height() as i32);
+        let _ = save_bgra_png(&dir.join("canvas_bgra.png"), &bgra, w, h);
+        log(&format!("probe canvas: {w}x{h} mean_bgr={:?}", mean_bgr(&bgra)));
+        if let Some(ref_pixels) = &reference {
+            if let Some((_, _, sw, sh)) = selected {
+                if w == sw && h == sh {
+                    log(&format!(
+                        "probe canvas_vs_reference diff_bgr={:?}",
+                        mean_abs_diff_bgra(&bgra, ref_pixels)
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(key) = LAST_H264_KEY.lock().ok().and_then(|g| g.clone()) {
+        let path = dir.join("key.h264");
+        let _ = std::fs::write(&path, &key);
+        if let Some(ffmpeg) = encoder::find_ffmpeg() {
+            let png = dir.join("decoded.png");
+            let mut cmd = std::process::Command::new(ffmpeg);
+            cmd.args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &path.to_string_lossy(),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=in_color_matrix=bt709:in_range=tv",
+                "-y",
+                &png.to_string_lossy(),
+            ]);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                cmd.creation_flags(CREATE_NO_WINDOW);
+            }
+            let _ = cmd.status();
+            if let Ok(img) = image::load_from_memory(&std::fs::read(&png).unwrap_or_default()) {
+                let mut bgra = img.to_rgba8().into_raw();
+                for p in bgra.chunks_exact_mut(4) {
+                    p.swap(0, 2);
+                }
+                log(&format!("probe decoded: {}x{} mean_bgr={:?}", img.width(), img.height(), mean_bgr(&bgra)));
+                if let Some((raw_pixels, rw, rh)) = LAST_RAW_FRAME.lock().ok().and_then(|g| g.clone()) {
+                    if rw == img.width() as i32 && rh == img.height() as i32 {
+                        log(&format!(
+                            "probe decoded_vs_raw diff_bgr={:?}",
+                            mean_abs_diff_bgra(&bgra, &raw_pixels)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    log(&format!("probe saved to {}", dir.display()));
+}
 fn start_self_capture(app: AppHandle, gen: u64) -> bool {
     log("self capture started");
     std::thread::spawn(move || {
@@ -1771,6 +1990,9 @@ impl H264Gate {
                 out.extend_from_slice(&self.sps_pps);
             }
             out.extend_from_slice(frame);
+            if LAST_H264_KEY.lock().map(|g| g.is_none()).unwrap_or(false) {
+                *LAST_H264_KEY.lock().unwrap() = Some(out.clone());
+            }
             let payload = H264Chunk {
                 seq: *seq,
                 key: true,
@@ -1851,6 +2073,9 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
         let height = frame.height() as i32;
         let mut buffer = frame.buffer()?;
         let data = buffer.as_nopadding_buffer()?;
+        if self.frames == 0 {
+            *LAST_RAW_FRAME.lock().unwrap() = Some((data.to_vec(), width, height));
+        }
 
         let cfg = config();
         let want_h264 = cfg.screen_share_codec != "jpeg"
@@ -2569,6 +2794,22 @@ const SHARE_JS: &str = r##"
         var currentTrack = null;
 
         // 共有のたびに比率・デコーダ状態をリセットする
+        // 色検証: トレイメニューから要求されたらキャンバスをPNGで送る
+        try {
+            tauri.event.listen("fastdisc://probe-request", function () {
+                setTimeout(function () {
+                    try {
+                        var url = canvas.toDataURL("image/png");
+                        var comma = url.indexOf(",");
+                        if (comma > 0) {
+                            invoke("probe_save", { pngBase64: url.slice(comma + 1) });
+                        }
+                    } catch (e) {
+                        guard("probe: " + ((e && e.message) || e));
+                    }
+                }, 400);
+            });
+        } catch (e) { }
         function resetCanvas(w, h) {
             canvas.width = w > 0 ? w : 1280;
             canvas.height = h > 0 ? h : 720;
