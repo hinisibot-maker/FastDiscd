@@ -100,6 +100,7 @@ static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 static ENCODER: std::sync::Mutex<Option<encoder::ActiveEncoder>> = std::sync::Mutex::new(None);
 static FRAME_CHANNEL: std::sync::Mutex<Option<tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>> =
     std::sync::Mutex::new(None);
+static ENCODER_CREATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static FORCE_JPEG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LAST_RAW_FRAME: std::sync::Mutex<Option<(Vec<u8>, i32, i32)>> = std::sync::Mutex::new(None);
 static LAST_H264_KEY: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
@@ -2183,6 +2184,8 @@ struct WgcHandler {
     out_chunks: u64,
     out_bytes: u64,
     gate: H264Gate,
+    pending_size: Option<(i32, i32)>,
+    size_changed_at: std::time::Instant,
 }
 
 impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
@@ -2205,6 +2208,8 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             out_chunks: 0,
             out_bytes: 0,
             gate: H264Gate::new(),
+            pending_size: None,
+            size_changed_at: std::time::Instant::now(),
         })
     }
 
@@ -2240,23 +2245,50 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             }
             let started = std::time::Instant::now();
             let mut guard = ENCODER.lock().unwrap();
+            if guard.is_some() {
+                self.pending_size = None;
+            }
             if guard.is_none() {
-                log(&format!("h264 create begin {width}x{height}"));
-                let created = encoder::FfmpegEncoder::create(width, height, self.fps, self.bitrate, &cfg.screen_share_encoder, &cfg.screen_share_quality)
-                    .map(encoder::ActiveEncoder::Ffmpeg)
-                    .or_else(|| {
-                        encoder::H264Encoder::create(width, height, self.fps, self.bitrate)
-                            .map(encoder::ActiveEncoder::Mf)
+                // エンコーダ生成（ffmpeg起動）は重いので、キャプチャスレッドを止めないよう別スレッドで行う。
+                if self.pending_size != Some((width, height)) {
+                    self.pending_size = Some((width, height));
+                    self.size_changed_at = std::time::Instant::now();
+                }
+                let wanted = self.pending_size.unwrap();
+                if self.size_changed_at.elapsed() > Duration::from_millis(250)
+                    && !ENCODER_CREATING.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    ENCODER_CREATING.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let app2 = self.app.clone();
+                    let fps = self.fps;
+                    let bitrate = self.bitrate;
+                    let encoder_pref = cfg.screen_share_encoder.clone();
+                    let quality = cfg.screen_share_quality.clone();
+                    std::thread::spawn(move || {
+                        log(&format!("h264 create async {}x{}", wanted.0, wanted.1));
+                        let created = encoder::FfmpegEncoder::create(
+                            wanted.0,
+                            wanted.1,
+                            fps,
+                            bitrate,
+                            &encoder_pref,
+                            &quality,
+                        )
+                        .map(encoder::ActiveEncoder::Ffmpeg)
+                        .or_else(|| {
+                            encoder::H264Encoder::create(wanted.0, wanted.1, fps, bitrate)
+                                .map(encoder::ActiveEncoder::Mf)
+                        });
+                        match created {
+                            Some(enc) => {
+                                log(&format!("h264 encoder: {} (created)", enc.describe()));
+                                *ENCODER.lock().unwrap() = Some(enc);
+                            }
+                            None => log("h264 encoder unavailable, falling back to JPEG"),
+                        }
+                        let _ = app2;
+                        ENCODER_CREATING.store(false, std::sync::atomic::Ordering::SeqCst);
                     });
-                match created {
-                    Some(enc) => {
-                        log(&format!("h264 encoder: {} (created)", enc.describe()));
-                        // 新しいエンコーダでは SPS/PPS から送り直す
-                        self.gate.reset();
-                        self.first = true;
-                        *guard = Some(enc);
-                    }
-                    None => log("h264 encoder unavailable, falling back to JPEG"),
                 }
             }
             if let Some(enc) = guard.as_mut() {
@@ -2380,12 +2412,12 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                     let secs = self.started_at.elapsed().as_secs_f32().max(0.001);
                     let actual_fps = self.frames as f32 / secs;
                     log(&format!(
-                        "h264 frames={} {:.1}fps {}x{} out_chunks={} out_kb={}",
+                        "h264 frames={} {:.1}fps cost={:.1}ms {}x{} out_kb={}",
                         self.frames,
                         actual_fps,
+                        self.cost_ema,
                         width,
                         height,
-                        self.out_chunks,
                         self.out_bytes / 1024
                     ));
                 }
