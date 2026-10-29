@@ -31,7 +31,7 @@ A lightweight desktop client for Discord, built with **Rust + Windows' built-in 
 | Voice chat | ✅ Works | WebRTC; microphone permission auto-granted; Discord's voice settings apply |
 | Notifications | ✅ Works | Windows toast notifications via WebView2 (permission auto-granted) |
 | Push-to-talk | ✅ Enhanced | **Works globally** — talking works even when another window is focused (key polling in Rust) |
-| Screen sharing | △ Experimental | Custom capture pipeline (whole screen, ~9 fps, no audio) |
+| Screen sharing | △ Experimental | WGC capture + H.264 (Media Foundation) + WebCodecs, screen/window picker with previews, adaptive bitrate/fps, no audio |
 | Global hotkeys (mute, etc.) | △ Partial | PTT only; other actions planned |
 | Zoom level | ✅ Custom | Discord's web app has no zoom setting, so FastDiscd provides its own |
 | Startup behavior / tray | ✅ Full | Launch at login, start minimized, minimize to tray, GPU toggle |

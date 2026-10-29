@@ -91,6 +91,7 @@ static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 static LAST_PATH: OnceLock<Mutex<String>> = OnceLock::new();
 static DISCORD_LOCALE: OnceLock<Mutex<String>> = OnceLock::new();
 static SELECTED_SOURCE: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sync::Mutex::new(None);
+static MAIN_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static ENCODER: std::sync::Mutex<Option<encoder::H264Encoder>> = std::sync::Mutex::new(None);
 static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -147,6 +148,10 @@ fn main() {
                 .background_color(tauri::utils::config::Color(30, 31, 34, 255))
                 .background_throttling(BackgroundThrottlingPolicy::Suspend)
                 .build()?;
+
+            if let Ok(hwnd) = window.hwnd() {
+                MAIN_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
+            }
 
             let main_handle = window.clone();
             window.on_window_event(move |event| {
@@ -227,6 +232,13 @@ fn main() {
                 }
             }
 
+            if std::env::var_os("RUSTCORD_TEST_SELF").is_some() {
+                *SELECTED_WINDOW.lock().unwrap() =
+                    Some(MAIN_HWND.load(std::sync::atomic::Ordering::SeqCst));
+                CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
+                let gen = CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst);
+                start_self_capture(app.handle().clone(), gen);
+            }
             if std::env::var_os("RUSTCORD_TEST_WGC").is_some() {
                 *SELECTED_MONITOR.lock().unwrap() = Some(0);
                 CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1377,6 +1389,148 @@ fn ptt_loop(window: WebviewWindow) {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
+
+/// WebView2 のページ描画を PNG で取得する（自ウィンドウ共有用）
+fn grab_webview_png(app: &AppHandle) -> Option<Vec<u8>> {
+    let window = app.get_webview_window("main")?;
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let dispatched = window.with_webview(move |webview| {
+        let controller = webview.controller();
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else {
+            return;
+        };
+        let Some(stream) = (unsafe { SHCreateMemStream(None) }) else {
+            return;
+        };
+        let read_stream = stream.clone();
+        let handler = CapturePreviewCompletedHandler::create(Box::new(move |_hr| {
+            unsafe {
+                let _ = read_stream.Seek(0, STREAM_SEEK_SET, None);
+                let mut stat = STATSTG::default();
+                if read_stream.Stat(&mut stat, STATFLAG_NONAME).is_err() {
+                    return Ok(());
+                }
+                let size = (stat.cbSize as usize).min(16 * 1024 * 1024);
+                if size == 0 {
+                    return Ok(());
+                }
+                let mut buf = vec![0u8; size];
+                let mut read = 0u32;
+                let _ = read_stream.Read(
+                    buf.as_mut_ptr() as *mut core::ffi::c_void,
+                    size as u32,
+                    Some(&mut read),
+                );
+                buf.truncate(read as usize);
+                let _ = tx.send(buf);
+            }
+            Ok(())
+        }));
+        unsafe {
+            let _ = core.CapturePreview(
+                COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                &stream,
+                &handler,
+            );
+        }
+    });
+    if dispatched.is_err() {
+        return None;
+    }
+    rx.recv_timeout(Duration::from_millis(1500)).ok().filter(|b| !b.is_empty())
+}
+
+/// FastDiscd 自身のウィンドウを WebView2 の描画ごと配信する
+fn start_self_capture(app: AppHandle, gen: u64) -> bool {
+    log("self capture started");
+    std::thread::spawn(move || {
+        let mut seq = 0u64;
+        let mut frames = 0u64;
+        while CAPTURING.load(std::sync::atomic::Ordering::SeqCst)
+            && CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst) == gen
+        {
+            let cfg = config();
+            let started = std::time::Instant::now();
+            let Some(png) = grab_webview_png(&app) else {
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            };
+            let Ok(img) = image::load_from_memory(&png) else {
+                continue;
+            };
+            let rgba = img.to_rgba8();
+            let width = rgba.width() as i32;
+            let height = rgba.height() as i32;
+            let mut pixels = rgba.into_raw();
+            for px in pixels.chunks_exact_mut(4) {
+                px.swap(0, 2); // RGBA -> BGRA
+            }
+            let nv12 = encoder::bgra_to_nv12(&pixels, width as usize, height as usize);
+
+            let mut guard = ENCODER.lock().unwrap();
+            if guard.is_none() {
+                if let Some(enc) = encoder::H264Encoder::create(
+                    width,
+                    height,
+                    cfg.screen_share_max_fps.clamp(5, 10),
+                    cfg.screen_share_bitrate_kbps.max(500),
+                ) {
+                    log(&format!("self h264 encoder: {} (hw={})", enc.info.name, enc.info.hardware));
+                    *guard = Some(enc);
+                }
+            }
+            let mut emitted = false;
+            if let Some(enc) = guard.as_mut() {
+                if enc.width() != width || enc.height() != height {
+                    let _ = enc.reconfigure(width, height, cfg.screen_share_bitrate_kbps.max(500));
+                }
+                let chunks = enc.encode(&nv12, frames == 0);
+                frames += 1;
+                for chunk in chunks {
+                    let key = is_keyframe(&chunk);
+                    let payload = H264Chunk {
+                        seq,
+                        key,
+                        width,
+                        height,
+                        data: base64::engine::general_purpose::STANDARD.encode(chunk),
+                    };
+                    seq += 1;
+                    let _ = app.emit("fastdisc://h264", payload);
+                }
+                emitted = true;
+                if frames == 1 || frames % 30 == 0 {
+                    log(&format!("self capture frames={} {}x{}", frames, width, height));
+                }
+            }
+            drop(guard);
+
+            if !emitted {
+                let rgb: Vec<u8> = pixels.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0]]).collect();
+                let mut out = Vec::new();
+                let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70);
+                if enc
+                    .encode(&rgb, width as u32, height as u32, image::ExtendedColorType::Rgb8)
+                    .is_ok()
+                {
+                    let payload = base64::engine::general_purpose::STANDARD.encode(out);
+                    let _ = app.emit("fastdisc://frame", payload);
+                }
+            }
+
+            let fps = cfg.screen_share_max_fps.clamp(5, 10) as u64;
+            let target = Duration::from_millis(1000 / fps);
+            let elapsed = started.elapsed();
+            if elapsed < target {
+                std::thread::sleep(target - elapsed);
+            }
+        }
+        let _ = app.emit("fastdisc://capture-ended", ());
+        log("self capture stopped");
+    });
+    true
+}
+#[tauri::command]
 fn capture_start(app: AppHandle) -> bool {
     // 既存セッション（WGC / GDI）を必ず停止してから、選択中のソースで開始し直す
     CAPTURE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1388,7 +1542,11 @@ fn capture_start(app: AppHandle) -> bool {
     let gen = CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst);
     let window = *SELECTED_WINDOW.lock().unwrap();
     if let Some(hwnd) = window {
-        if start_wgc_window_capture(app.clone(), hwnd) {
+        if hwnd == MAIN_HWND.load(std::sync::atomic::Ordering::SeqCst) {
+            if start_self_capture(app.clone(), gen) {
+                return true;
+            }
+        } else if start_wgc_window_capture(app.clone(), hwnd) {
             return true;
         }
     }
@@ -1467,6 +1625,11 @@ struct WgcHandler {
     frames: u64,
     seq: u64,
     first: bool,
+    fps: u32,
+    bitrate: u32,
+    last_adjust: std::time::Instant,
+    last_emit: std::time::Instant,
+    cost_ema: f32,
 }
 
 impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
@@ -1474,7 +1637,18 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     fn new(ctx: windows_capture::capture::Context<Self::Flags>) -> Result<Self, Self::Error> {
-        Ok(Self { app: ctx.flags, frames: 0, seq: 0, first: true })
+        let cfg = config();
+        Ok(Self {
+            app: ctx.flags,
+            frames: 0,
+            seq: 0,
+            first: true,
+            fps: cfg.screen_share_max_fps.clamp(5, 60),
+            bitrate: cfg.screen_share_bitrate_kbps.max(500),
+            last_adjust: std::time::Instant::now(),
+            last_emit: std::time::Instant::now() - Duration::from_secs(1),
+            cost_ema: 0.0,
+        })
     }
 
     fn on_frame_arrived(
@@ -1494,13 +1668,19 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
         let want_h264 = cfg.screen_share_codec != "jpeg";
 
         if want_h264 {
+            // 目標fpsに合わせて間引く（負荷時は fps を下げる）
+            let min_interval = Duration::from_millis(1000 / self.fps.max(1) as u64);
+            if !self.first && self.last_emit.elapsed() < min_interval {
+                return Ok(());
+            }
+            let started = std::time::Instant::now();
             let mut guard = ENCODER.lock().unwrap();
             if guard.is_none() {
                 match encoder::H264Encoder::create(
                     width,
                     height,
-                    cfg.screen_share_max_fps.max(5),
-                    cfg.screen_share_bitrate_kbps.max(500),
+                    self.fps,
+                    self.bitrate,
                 ) {
                     Some(enc) => {
                         log(&format!(
@@ -1514,7 +1694,12 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             }
             if let Some(enc) = guard.as_mut() {
                 if enc.width() != width || enc.height() != height {
-                    if !enc.reconfigure(width, height, cfg.screen_share_bitrate_kbps.max(500)) {
+                    if enc.reconfigure(width, height, self.bitrate) {
+                        // 解像度変更後は IDR を強制してデコーダに新しい SPS を届ける
+                        enc.request_keyframe();
+                        self.first = true;
+                        log(&format!("h264 reconfigured: {width}x{height}"));
+                    } else {
                         log("h264 reconfigure failed, recreating encoder");
                         *guard = None;
                     }
@@ -1536,6 +1721,49 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                     };
                     self.seq += 1;
                     let _ = self.app.emit("fastdisc://h264", payload);
+                }
+                self.last_emit = std::time::Instant::now();
+                let cost = started.elapsed().as_secs_f32() * 1000.0;
+                self.cost_ema = if self.cost_ema <= 0.0 {
+                    cost
+                } else {
+                    self.cost_ema * 0.8 + cost * 0.2
+                };
+                if self.last_adjust.elapsed() > Duration::from_secs(2) {
+                    self.last_adjust = std::time::Instant::now();
+                    let budget = 1000.0 / self.fps.max(1) as f32;
+                    let gpu = gpu_encoder_utilization().unwrap_or(0);
+                    if self.cost_ema > budget * 0.8 || gpu > 70 {
+                        self.bitrate = ((self.bitrate as f32) * 0.8) as u32;
+                        self.bitrate = self.bitrate.max(1000);
+                        if self.cost_ema > budget {
+                            self.fps = match self.fps {
+                                30..=60 => 24,
+                                24 => 20,
+                                20 => 15,
+                                15 => 10,
+                                other => other,
+                            };
+                        }
+                    } else if self.cost_ema < budget * 0.5 && gpu < 40 {
+                        self.bitrate = ((self.bitrate as f32) * 1.1) as u32;
+                        self.bitrate = self.bitrate.min(cfg.screen_share_bitrate_kbps.max(1000));
+                        self.fps = match self.fps {
+                            10 => 15,
+                            15 => 20,
+                            20 => 24,
+                            24 => 30,
+                            other => other,
+                        }
+                        .min(cfg.screen_share_max_fps.clamp(5, 60));
+                    }
+                    if let Some(enc) = guard.as_mut() {
+                        let _ = enc.reconfigure(width, height, self.bitrate);
+                    }
+                    log(&format!(
+                        "h264 adapt: bitrate={}kbps fps={} cost={:.1}ms gpu={}%",
+                        self.bitrate, self.fps, self.cost_ema, gpu
+                    ));
                 }
                 if self.frames == 1 || self.frames % 120 == 0 {
                     log(&format!("h264 frames={} {}x{}", self.frames, width, height));
@@ -1838,11 +2066,11 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2Controller2, COREWEBVIEW2_COLOR,
     ICoreWebView2, ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_19, ICoreWebView2_27,
     ICoreWebView2_3,
-    COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+    COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
 };
 use webview2_com::{
-    CallDevToolsProtocolMethodCompletedHandler, ClearBrowsingDataCompletedHandler, ExecuteScriptCompletedHandler,
+    CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler, ClearBrowsingDataCompletedHandler, ExecuteScriptCompletedHandler,
     NavigationCompletedEventHandler, PermissionRequestedEventHandler, ScreenCaptureStartingEventHandler,
     TrySuspendCompletedHandler,
 };
@@ -1853,6 +2081,8 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
+use windows::Win32::UI::Shell::SHCreateMemStream;
+use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA};
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
