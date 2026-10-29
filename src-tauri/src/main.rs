@@ -1547,7 +1547,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                     let _ = enc.reconfigure(width, height, cfg.screen_share_bitrate_kbps.max(500));
                     gate.reset();
                 }
-                let chunks = enc.encode(&nv12, frames == 0);
+                let chunks = enc.encode(&pixels, width, height, frames == 0);
                 frames += 1;
                 let mut frame_bytes: Vec<u8> = Vec::new();
                 for chunk in &chunks {
@@ -1901,18 +1901,17 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                         return Ok(());
                     }
                 }
-                let nv12 = encoder::bgra_to_nv12(data, width as usize, height as usize);
                 if self.frames % 60 == 0 {
                     let mut sum = 0u64;
                     let mut count = 0u64;
-                    for v in nv12.iter().step_by(97) {
-                        sum += *v as u64;
+                    for px in data.chunks_exact(4).step_by(97) {
+                        sum += (px[0] as u64 + px[1] as u64 + px[2] as u64) / 3;
                         count += 1;
                     }
                     let mean = if count > 0 { sum / count } else { 0 };
                     log(&format!("frame luma mean={mean}"));
                 }
-                let chunks = enc.encode(&nv12, self.first || self.frames % 120 == 0);
+                let chunks = enc.encode(data, width, height, self.first || self.frames % 120 == 0);
                 self.first = false;
                 self.frames += 1;
                 // 1フレーム分の NAL を結合し、SPS/PPS+IDR が揃うまで待つ
@@ -2555,6 +2554,7 @@ const SHARE_JS: &str = r##"
         var h264Frames = 0;
         var h264Chunks = 0;
         var fallbackTimer = null;
+        var currentTrack = null;
 
         // 共有のたびに比率・デコーダ状態をリセットする
         function resetCanvas(w, h) {
@@ -2611,6 +2611,9 @@ const SHARE_JS: &str = r##"
                         }
                         ctx.drawImage(frame, 0, 0);
                         frame.close();
+                        if (currentTrack && currentTrack.applyConstraints) {
+                            currentTrack.applyConstraints({ width: frame.displayWidth, height: frame.displayHeight }).catch(function () { });
+                        }
                         h264Frames++;
                         if (h264Frames === 1 || h264Frames % 60 === 0) {
                             try { invoke("js_guard_error", { message: "h264 decoded=" + h264Frames + " chunks=" + h264Chunks }); } catch (e) { }
@@ -2752,6 +2755,7 @@ const SHARE_JS: &str = r##"
                     }).then(function () {
                     var stream = canvas.captureStream(30);
                         var track = stream.getVideoTracks()[0];
+                        currentTrack = track;
                         if (track) {
                             try { track.contentHint = "detail"; } catch (e) { }
                             track.addEventListener("ended", function () { invoke("capture_stop"); });

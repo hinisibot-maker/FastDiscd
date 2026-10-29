@@ -588,7 +588,7 @@ impl FfmpegEncoder {
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
-                "nv12",
+                "bgra",
                 "-s",
                 &format!("{width}x{height}"),
                 "-r",
@@ -697,9 +697,9 @@ impl FfmpegEncoder {
         self.height
     }
 
-    pub fn encode(&mut self, nv12: &[u8]) -> Vec<Vec<u8>> {
+    pub fn encode_bgra(&mut self, bgra: &[u8]) -> Vec<Vec<u8>> {
         use std::io::Write;
-        if self.stdin.write_all(nv12).is_err() {
+        if self.stdin.write_all(bgra).is_err() {
             return Vec::new();
         }
         let _ = self.stdin.flush();
@@ -756,10 +756,14 @@ impl ActiveEncoder {
         }
     }
 
-    pub fn encode(&mut self, nv12: &[u8], force_key: bool) -> Vec<Vec<u8>> {
+    /// BGRA フレームをエンコードする（MFは内部でNV12へ変換）
+    pub fn encode(&mut self, bgra: &[u8], width: i32, height: i32, force_key: bool) -> Vec<Vec<u8>> {
         match self {
-            Self::Mf(e) => e.encode(nv12, force_key),
-            Self::Ffmpeg(e) => e.encode(nv12),
+            Self::Mf(e) => {
+                let nv12 = bgra_to_nv12(bgra, width as usize, height as usize);
+                e.encode(&nv12, force_key)
+            }
+            Self::Ffmpeg(e) => e.encode_bgra(bgra),
         }
     }
 
