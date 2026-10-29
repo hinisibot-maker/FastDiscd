@@ -184,6 +184,13 @@ fn main() {
                     .build();
             }
 
+            if let Ok(h) = std::env::var("RUSTCORD_TEST_WGC_WINDOW") {
+                if let Ok(hwnd) = h.parse::<isize>() {
+                    CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = start_wgc_window_capture(app.handle().clone(), hwnd);
+                }
+            }
+
             if std::env::var_os("RUSTCORD_TEST_WGC").is_some() {
                 *SELECTED_MONITOR.lock().unwrap() = Some(0);
                 CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1302,6 +1309,12 @@ fn capture_start(app: AppHandle) -> bool {
         log("previous capture stopped for restart");
     }
     let gen = CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst);
+    let window = *SELECTED_WINDOW.lock().unwrap();
+    if let Some(hwnd) = window {
+        if start_wgc_window_capture(app.clone(), hwnd) {
+            return true;
+        }
+    }
     let monitor = *SELECTED_MONITOR.lock().unwrap();
     if let Some(index) = monitor {
         if start_wgc_capture(app.clone(), index) {
@@ -1422,6 +1435,46 @@ fn start_wgc_capture(app: AppHandle, monitor_index: usize) -> bool {
         }
         Err(e) => {
             log(&format!("wgc error: {e}"));
+            false
+        }
+    }
+}
+
+fn start_wgc_window_capture(app: AppHandle, hwnd: isize) -> bool {
+    use windows_capture::capture::GraphicsCaptureApiHandler;
+    use windows_capture::window::Window;
+    use windows_capture::settings::{
+        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
+        MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+    };
+
+    let window = Window::from_raw_hwnd(hwnd as *mut core::ffi::c_void);
+    if !window.is_valid() {
+        log("wgc window invalid");
+        return false;
+    }
+    let settings = Settings::new(
+        window,
+        CursorCaptureSettings::WithCursor,
+        DrawBorderSettings::WithoutBorder,
+        SecondaryWindowSettings::Default,
+        MinimumUpdateIntervalSettings::Custom(Duration::from_millis(16)),
+        DirtyRegionSettings::Default,
+        ColorFormat::Rgba8,
+        app,
+    );
+    if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
+        let _ = control.stop();
+        log("previous wgc session stopped (window)");
+    }
+    match WgcHandler::start_free_threaded(settings) {
+        Ok(control) => {
+            *WGC_CONTROL.lock().unwrap() = Some(control);
+            log("wgc window capture started");
+            true
+        }
+        Err(e) => {
+            log(&format!("wgc window error: {e}"));
             false
         }
     }
