@@ -169,6 +169,12 @@ fn main() {
                 open_settings(app.handle());
             }
 
+            if std::env::var_os("RUSTCORD_TEST_WGC").is_some() {
+                *SELECTED_MONITOR.lock().unwrap() = Some(0);
+                CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
+                let _ = start_wgc_capture(app.handle().clone(), 0);
+            }
+
             if std::env::var_os("RUSTCORD_OPEN_PICKER").is_some() {
                 show_source_picker(app.handle().clone());
             }
@@ -797,6 +803,7 @@ struct CaptureSource {
 }
 
 static SELECTED_WINDOW: std::sync::Mutex<Option<isize>> = std::sync::Mutex::new(None);
+static SELECTED_MONITOR: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
 
 fn encode_thumb(pixels: &[u8], w: i32, h: i32) -> String {
     let rgb: Vec<u8> = pixels
@@ -982,6 +989,7 @@ fn select_source(app: AppHandle, id: String, kind: String, x: i32, y: i32, width
     *SELECTED_SOURCE.lock().unwrap() = Some((x, y, width, height));
     let hwnd = id.strip_prefix("window:").and_then(|v| v.parse::<isize>().ok());
     *SELECTED_WINDOW.lock().unwrap() = hwnd;
+    *SELECTED_MONITOR.lock().unwrap() = id.strip_prefix("monitor:").and_then(|v| v.parse::<usize>().ok());
     log(&format!("capture source selected: {id}"));
     if let Some(window) = app.get_webview_window("picker") {
         let _ = window.close();
@@ -1273,6 +1281,12 @@ fn capture_start(app: AppHandle) -> bool {
     if CAPTURING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return true;
     }
+    let monitor = *SELECTED_MONITOR.lock().unwrap();
+    if let Some(index) = monitor {
+        if start_wgc_capture(app.clone(), index) {
+            return true;
+        }
+    }
     std::thread::spawn(move || capture_loop(app));
     true
 }
@@ -1296,6 +1310,84 @@ fn disable_screen_share() {
     log("screen share auto-disabled");
 }
 
+
+struct WgcHandler {
+    app: AppHandle,
+    frames: u64,
+}
+
+impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
+    type Flags = AppHandle;
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+
+    fn new(ctx: windows_capture::capture::Context<Self::Flags>) -> Result<Self, Self::Error> {
+        Ok(Self { app: ctx.flags, frames: 0 })
+    }
+
+    fn on_frame_arrived(
+        &mut self,
+        frame: &mut windows_capture::frame::Frame,
+        _control: windows_capture::graphics_capture_api::InternalCaptureControl,
+    ) -> Result<(), Self::Error> {
+        if !CAPTURING.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        let width = frame.width();
+        let height = frame.height();
+        let mut buffer = frame.buffer()?;
+        let data = buffer.as_nopadding_buffer()?;
+        let rgb: Vec<u8> = data.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let mut out = Vec::new();
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70);
+        enc.encode(&rgb, width, height, image::ExtendedColorType::Rgb8)?;
+        let payload = base64::engine::general_purpose::STANDARD.encode(out);
+        let _ = self.app.emit("fastdisc://frame", payload);
+        self.frames += 1;
+        if self.frames == 1 || self.frames % 60 == 0 {
+            log(&format!("wgc frames={} {}x{}", self.frames, width, height));
+        }
+        Ok(())
+    }
+
+    fn on_closed(&mut self) -> Result<(), Self::Error> {
+        CAPTURING.store(false, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+fn start_wgc_capture(app: AppHandle, monitor_index: usize) -> bool {
+    use windows_capture::capture::GraphicsCaptureApiHandler;
+    use windows_capture::monitor::Monitor;
+    use windows_capture::settings::{
+        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
+        MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+    };
+
+    // windows-capture のモニタインデックスは 1 始まり
+    let monitor = match Monitor::from_index(monitor_index + 1) {
+        Ok(m) => m,
+        Err(e) => {
+            log(&format!("wgc monitor error: {e}"));
+            return false;
+        }
+    };
+    let settings = Settings::new(
+        monitor,
+        CursorCaptureSettings::WithCursor,
+        DrawBorderSettings::WithoutBorder,
+        SecondaryWindowSettings::Default,
+        MinimumUpdateIntervalSettings::Custom(Duration::from_millis(16)),
+        DirtyRegionSettings::Default,
+        ColorFormat::Rgba8,
+        app,
+    );
+    std::thread::spawn(move || match WgcHandler::start_free_threaded(settings) {
+        Ok(_) => log("wgc thread finished"),
+        Err(e) => log(&format!("wgc error: {e}")),
+    });
+    log("wgc capture started");
+    true
+}
 fn capture_loop(app: AppHandle) {
     let mut width = 1024i32;
     let mut height = 576i32;
