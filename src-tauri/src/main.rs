@@ -173,7 +173,7 @@ fn main() {
 
             {
                 let app_handle = app.handle().clone();
-                let _ = WebviewWindowBuilder::new(&app_handle, "picker", WebviewUrl::App("picker.html".into()))
+                let builder = WebviewWindowBuilder::new(&app_handle, "picker", WebviewUrl::App("picker.html".into()))
                     .title("配信する画面を選択")
                     .inner_size(720.0, 620.0)
                     .resizable(true)
@@ -882,22 +882,36 @@ fn screen_thumb(x: i32, y: i32, w: i32, h: i32, tw: i32, th: i32) -> String {
 windows_targets::link!("user32.dll" "system" fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> windows::core::BOOL);
 
 /// ウィンドウのサムネイル（PrintWindow）
-fn window_thumb(hwnd: isize, tw: i32, th: i32) -> String {
+fn window_thumb(hwnd: isize, w: i32, h: i32, tw: i32, th: i32) -> String {
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::Foundation::HWND;
     unsafe {
+        if w <= 0 || h <= 0 { return String::new(); }
         let screen = GetDC(None);
         if screen.is_invalid() { return String::new(); }
+        let handle = HWND(hwnd as *mut core::ffi::c_void);
+
+        // 元サイズで描画してから縮小する（拡大表示を避ける）
+        let src_mem = CreateCompatibleDC(Some(screen));
+        let src_bmp = CreateCompatibleBitmap(screen, w, h);
+        let old_src = SelectObject(src_mem, src_bmp.into());
+        let rendered = if PrintWindow(handle, src_mem, 2).as_bool() {
+            true
+        } else {
+            let src_dc = GetDC(Some(handle));
+            let ok = BitBlt(src_mem, 0, 0, w, h, Some(src_dc), 0, 0, SRCCOPY).is_ok();
+            let _ = ReleaseDC(Some(handle), src_dc);
+            ok
+        };
+
         let mem = CreateCompatibleDC(Some(screen));
         let bitmap = CreateCompatibleBitmap(screen, tw, th);
         let old = SelectObject(mem, bitmap.into());
         let _ = SetStretchBltMode(mem, HALFTONE);
-        let h = HWND(hwnd as *mut core::ffi::c_void);
-        if !PrintWindow(h, mem, 2).as_bool() {
-            let src_dc = GetDC(Some(h));
-            let _ = BitBlt(mem, 0, 0, tw, th, Some(src_dc), 0, 0, SRCCOPY);
-            let _ = ReleaseDC(Some(h), src_dc);
+        if rendered {
+            let _ = StretchBlt(mem, 0, 0, tw, th, Some(src_mem), 0, 0, w, h, SRCCOPY);
         }
+
         let mut pixels = vec![0u8; (tw * th * 4) as usize];
         let mut info = BITMAPINFO::default();
         info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -907,14 +921,17 @@ fn window_thumb(hwnd: isize, tw: i32, th: i32) -> String {
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB.0;
         let _ = GetDIBits(mem, bitmap, 0, th as u32, Some(pixels.as_mut_ptr().cast()), &mut info, DIB_RGB_COLORS);
+
         let _ = SelectObject(mem, old);
         let _ = DeleteObject(bitmap.into());
         let _ = DeleteDC(mem);
+        let _ = SelectObject(src_mem, old_src);
+        let _ = DeleteObject(src_bmp.into());
+        let _ = DeleteDC(src_mem);
         let _ = ReleaseDC(None, screen);
         encode_thumb(&pixels, tw, th)
     }
 }
-
 #[tauri::command]
 fn list_sources() -> Vec<CaptureSource> {
     let mut out = Vec::new();
@@ -954,7 +971,7 @@ fn list_sources() -> Vec<CaptureSource> {
                 y: rect.top,
                 width: w,
                 height: h,
-                thumb: window_thumb(hwnd, 160, 90),
+                thumb: window_thumb(hwnd, w, h, 160, 90),
             });
         }
     }
@@ -965,9 +982,6 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, data: LPARAM) -> windows:
     let list = &mut *(data.0 as *mut Vec<(isize, String, RECT)>);
     if !IsWindowVisible(hwnd).as_bool() { return windows::core::BOOL(1); }
     if IsIconic(hwnd).as_bool() { return windows::core::BOOL(1); }
-    let mut pid = 0u32;
-    let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
-    if pid == std::process::id() { return windows::core::BOOL(1); }
     let len = GetWindowTextLengthW(hwnd);
     if len <= 0 { return windows::core::BOOL(1); }
 
@@ -989,8 +1003,6 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, data: LPARAM) -> windows:
         "Windows.UI.Composition.DesktopWindowContentBridge",
     ];
     if BLOCKED_CLASSES.contains(&class.as_str()) { return windows::core::BOOL(1); }
-    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
-    if (ex & (WS_EX_TOOLWINDOW.0 as i32)) != 0 { return windows::core::BOOL(1); }
     let mut cloaked = 0u32;
     let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4);
     if cloaked != 0 { return windows::core::BOOL(1); }
