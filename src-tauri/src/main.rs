@@ -1461,6 +1461,20 @@ fn ptt_loop(window: WebviewWindow) {
 
 #[tauri::command]
 
+/// H.264は偶数サイズを要求するため、奇数なら1px切り落として揃える
+fn fit_even_bgra(data: &[u8], width: i32, height: i32) -> (std::borrow::Cow<'_, [u8]>, i32, i32) {
+    let ew = width & !1;
+    let eh = height & !1;
+    if ew == width && eh == height {
+        return (std::borrow::Cow::Borrowed(data), width, height);
+    }
+    let mut out = Vec::with_capacity((ew * eh * 4) as usize);
+    for y in 0..eh {
+        let start = (y * width * 4) as usize;
+        out.extend_from_slice(&data[start..start + (ew * 4) as usize]);
+    }
+    (std::borrow::Cow::Owned(out), ew, eh)
+}
 /// WebView2 のページ描画を PNG で取得する（自ウィンドウ共有用）
 fn grab_webview_png(app: &AppHandle) -> Option<Vec<u8>> {
     let window = app.get_webview_window("main")?;
@@ -1735,7 +1749,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
             for px in pixels.chunks_exact_mut(4) {
                 px.swap(0, 2); // RGBA -> BGRA
             }
-            let nv12 = encoder::bgra_to_nv12(&pixels, width as usize, height as usize);
+            let (pixels, width, height) = fit_even_bgra(&pixels, width, height);
 
             let mut guard = ENCODER.lock().unwrap();
             if guard.is_none() {
@@ -2076,6 +2090,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
         if self.frames == 0 {
             *LAST_RAW_FRAME.lock().unwrap() = Some((data.to_vec(), width, height));
         }
+        let (pixels, width, height) = fit_even_bgra(data, width, height);
 
         let cfg = config();
         let want_h264 = cfg.screen_share_codec != "jpeg"
@@ -2141,14 +2156,14 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                 if self.frames % 60 == 0 {
                     let mut sum = 0u64;
                     let mut count = 0u64;
-                    for px in data.chunks_exact(4).step_by(97) {
+                    for px in pixels.chunks_exact(4).step_by(97) {
                         sum += (px[0] as u64 + px[1] as u64 + px[2] as u64) / 3;
                         count += 1;
                     }
                     let mean = if count > 0 { sum / count } else { 0 };
                     log(&format!("frame luma mean={mean}"));
                 }
-                let chunks = enc.encode(data, width, height, self.first || self.frames % 120 == 0);
+                let chunks = enc.encode(&pixels, width, height, self.first || self.frames % 120 == 0);
                 self.first = false;
                 self.frames += 1;
                 // 1フレーム分の NAL を結合し、SPS/PPS+IDR が揃うまで待つ
