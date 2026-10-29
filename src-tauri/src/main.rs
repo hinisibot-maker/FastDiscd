@@ -94,6 +94,7 @@ static SELECTED_SOURCE: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sy
 static MAIN_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static ENCODER: std::sync::Mutex<Option<encoder::ActiveEncoder>> = std::sync::Mutex::new(None);
+static FORCE_JPEG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -123,6 +124,7 @@ fn main() {
             set_autostart,
             get_discord_locale,
             capture_start,
+            request_jpeg_fallback,
             capture_stop,
             js_guard_error,
             window_minimize,
@@ -1139,7 +1141,9 @@ fn select_source(app: AppHandle, id: String, kind: String, x: i32, y: i32, width
     } else {
         None
     };
-    log(&format!("capture source selected: {id}"));
+    log(&format!(
+        "capture source selected: {id} kind={kind} {width}x{height} at {x},{y}"
+    ));
     if let Some(window) = app.get_webview_window("picker") {
         let _ = window.hide();
     }
@@ -1483,6 +1487,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
     std::thread::spawn(move || {
         let mut seq = 0u64;
         let mut frames = 0u64;
+        let mut gate = H264Gate::new();
         while CAPTURING.load(std::sync::atomic::Ordering::SeqCst)
             && CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst) == gen
         {
@@ -1539,6 +1544,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
             if let Some(enc) = guard.as_mut() {
                 if enc.width() != width || enc.height() != height {
                     let _ = enc.reconfigure(width, height, cfg.screen_share_bitrate_kbps.max(500));
+                    gate.reset();
                 }
                 let chunks = enc.encode(&nv12, frames == 0);
                 frames += 1;
@@ -1547,16 +1553,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                     frame_bytes.extend_from_slice(chunk);
                 }
                 if !frame_bytes.is_empty() {
-                    let key = is_keyframe(&frame_bytes);
-                    let payload = H264Chunk {
-                        seq,
-                        key,
-                        width,
-                        height,
-                        data: base64::engine::general_purpose::STANDARD.encode(&frame_bytes),
-                    };
-                    seq += 1;
-                    let _ = app.emit("fastdisc://h264", payload);
+                    gate.feed(&app, &mut seq, &frame_bytes, width, height);
                 }
                 emitted = true;
                 if frames == 1 || frames % 30 == 0 {
@@ -1591,10 +1588,18 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
     true
 }
 #[tauri::command]
+fn request_jpeg_fallback() {
+    FORCE_JPEG.store(true, std::sync::atomic::Ordering::SeqCst);
+    *ENCODER.lock().unwrap() = None;
+    log("jpeg fallback requested by page");
+}
+
+#[tauri::command]
 fn capture_start(app: AppHandle) -> bool {
     // 既存セッション（WGC / GDI）を必ず停止してから、選択中のソースで開始し直す
     CAPTURE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
+    FORCE_JPEG.store(false, std::sync::atomic::Ordering::SeqCst);
     if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
         let _ = control.stop();
         log("previous capture stopped for restart");
@@ -1659,25 +1664,130 @@ struct H264Chunk {
 }
 
 fn is_keyframe(data: &[u8]) -> bool {
+    annexb_nals(data).iter().any(|(_, _, t)| *t == 5)
+}
+
+/// Annex-B の NAL を (開始位置, 終了位置, NALタイプ) で返す
+fn annexb_nals(data: &[u8]) -> Vec<(usize, usize, u8)> {
+    let mut out = Vec::new();
+    let mut current: Option<(usize, usize)> = None;
     let mut i = 0;
-    while i + 4 < data.len() {
-        if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-            let nal = data[i + 3] & 0x1f;
-            if nal == 5 || nal == 7 {
-                return true;
+    while i + 3 < data.len() {
+        let sc3 = data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1;
+        let sc4 = i + 4 <= data.len()
+            && data[i] == 0
+            && data[i + 1] == 0
+            && data[i + 2] == 0
+            && data[i + 3] == 1;
+        if sc3 || sc4 {
+            let header = if sc3 { i + 3 } else { i + 4 };
+            if let Some((start, h)) = current {
+                if header > h && h < data.len() {
+                    out.push((start, i, data[h] & 0x1f));
+                }
             }
-            i += 3;
-        } else if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
-            let nal = data[i + 4] & 0x1f;
-            if nal == 5 || nal == 7 {
-                return true;
-            }
-            i += 4;
+            current = Some((i, header));
+            i = header + 1;
         } else {
             i += 1;
         }
     }
-    false
+    if let Some((start, h)) = current {
+        if h < data.len() {
+            out.push((start, data.len(), data[h] & 0x1f));
+        }
+    }
+    out
+}
+
+#[derive(Clone, serde::Serialize)]
+struct H264Config {
+    sps_pps: String,
+    width: i32,
+    height: i32,
+}
+
+/// SPS/PPS を保持し、IDR が来るまで出力を待つゲート
+struct H264Gate {
+    sps_pps: Vec<u8>,
+    config_sent: bool,
+    got_key: bool,
+}
+
+impl H264Gate {
+    fn new() -> Self {
+        Self { sps_pps: Vec::new(), config_sent: false, got_key: false }
+    }
+
+    fn reset(&mut self) {
+        self.sps_pps.clear();
+        self.config_sent = false;
+        self.got_key = false;
+    }
+
+    /// 1フレーム分の Annex-B を受け取り、必要ならイベントを送る
+    fn feed(&mut self, app: &AppHandle, seq: &mut u64, frame: &[u8], width: i32, height: i32) -> bool {
+        let nals = annexb_nals(frame);
+        if nals.is_empty() {
+            return false;
+        }
+        for &(start, end, t) in &nals {
+            if t == 7 || t == 8 {
+                self.sps_pps.extend_from_slice(&frame[start..end]);
+            }
+        }
+        let has_idr = nals.iter().any(|(_, _, t)| *t == 5);
+        if has_idr {
+            if !self.config_sent {
+                let cfg = H264Config {
+                    sps_pps: base64::engine::general_purpose::STANDARD.encode(&self.sps_pps),
+                    width,
+                    height,
+                };
+                let _ = app.emit("fastdisc://h264-config", cfg);
+                self.config_sent = true;
+                log(&format!(
+                    "h264 config sent sps_pps={}B {}x{}",
+                    self.sps_pps.len(),
+                    width,
+                    height
+                ));
+            }
+            let mut out: Vec<u8> = Vec::new();
+            let starts_with_ps = matches!(nals.first(), Some((_, _, t)) if *t == 7 || *t == 8);
+            if !starts_with_ps {
+                out.extend_from_slice(&self.sps_pps);
+            }
+            out.extend_from_slice(frame);
+            let payload = H264Chunk {
+                seq: *seq,
+                key: true,
+                width,
+                height,
+                data: base64::engine::general_purpose::STANDARD.encode(&out),
+            };
+            *seq += 1;
+            let _ = app.emit("fastdisc://h264", payload);
+            if !self.got_key {
+                log(&format!("h264 first key chunk bytes={} {}x{}", out.len(), width, height));
+            }
+            self.got_key = true;
+            true
+        } else if self.got_key {
+            let payload = H264Chunk {
+                seq: *seq,
+                key: false,
+                width,
+                height,
+                data: base64::engine::general_purpose::STANDARD.encode(frame),
+            };
+            *seq += 1;
+            let _ = app.emit("fastdisc://h264", payload);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 struct WgcHandler {
@@ -1692,6 +1802,7 @@ struct WgcHandler {
     cost_ema: f32,
     out_chunks: u64,
     out_bytes: u64,
+    gate: H264Gate,
 }
 
 impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
@@ -1712,6 +1823,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             cost_ema: 0.0,
             out_chunks: 0,
             out_bytes: 0,
+            gate: H264Gate::new(),
         })
     }
 
@@ -1729,7 +1841,8 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
         let data = buffer.as_nopadding_buffer()?;
 
         let cfg = config();
-        let want_h264 = cfg.screen_share_codec != "jpeg";
+        let want_h264 = cfg.screen_share_codec != "jpeg"
+            && !FORCE_JPEG.load(std::sync::atomic::Ordering::SeqCst);
 
         if want_h264 {
             // 目標fpsに合わせて間引く（負荷時は fps を下げる）
@@ -1760,6 +1873,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                         // 解像度変更後は IDR を強制してデコーダに新しい SPS を届ける
                         enc.request_keyframe();
                         self.first = true;
+                        self.gate.reset();
                         log(&format!("h264 reconfigured: {width}x{height}"));
                     } else {
                         log("h264 reconfigure failed, recreating encoder");
@@ -1789,7 +1903,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                 let chunks = enc.encode(&nv12, self.first || self.frames % 120 == 0);
                 self.first = false;
                 self.frames += 1;
-                // 1フレーム分の NAL をまとめて1イベントにする（IPC・メモリ負荷を下げる）
+                // 1フレーム分の NAL を結合し、SPS/PPS+IDR が揃うまで待つ
                 let mut frame_bytes: Vec<u8> = Vec::new();
                 for chunk in &chunks {
                     frame_bytes.extend_from_slice(chunk);
@@ -1797,16 +1911,9 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                 self.out_chunks += 1;
                 self.out_bytes += frame_bytes.len() as u64;
                 if !frame_bytes.is_empty() {
-                    let key = is_keyframe(&frame_bytes);
-                    let payload = H264Chunk {
-                        seq: self.seq,
-                        key,
-                        width,
-                        height,
-                        data: base64::engine::general_purpose::STANDARD.encode(&frame_bytes),
-                    };
-                    self.seq += 1;
-                    let _ = self.app.emit("fastdisc://h264", payload);
+                    let mut seq = self.seq;
+                    self.gate.feed(&self.app, &mut seq, &frame_bytes, width, height);
+                    self.seq = seq;
                 }
                 self.last_emit = std::time::Instant::now();
                 let cost = started.elapsed().as_secs_f32() * 1000.0;
@@ -2432,7 +2539,10 @@ const SHARE_JS: &str = r##"
         var usingH264 = false;
         var decodedWidth = 0;
         var decodedHeight = 0;
-        var awaitingKey = true;
+        var h264Configured = false;
+        var h264Frames = 0;
+        var h264Chunks = 0;
+        var fallbackTimer = null;
 
         function b64ToBytes(b64) {
             var bin = atob(b64);
@@ -2468,11 +2578,16 @@ const SHARE_JS: &str = r##"
                         }
                         ctx.drawImage(frame, 0, 0);
                         frame.close();
+                        h264Frames++;
+                        if (h264Frames === 1 || h264Frames % 60 === 0) {
+                            try { invoke("js_guard_error", { message: "h264 decoded=" + h264Frames + " chunks=" + h264Chunks }); } catch (e) { }
+                        }
                     },
                     error: function (e) {
                         guard("h264 decoder: " + ((e && e.message) || e));
                         decoder = null;
                         usingH264 = false;
+                        try { invoke("request_jpeg_fallback"); } catch (e2) { }
                     }
                 });
                 return true;
@@ -2511,9 +2626,9 @@ const SHARE_JS: &str = r##"
                         } catch (e) {
                             return;
                         }
+                        h264Chunks++;
                         try {
-                            var needConfig = decoder.state !== "configured" || decodedWidth !== p.width || decodedHeight !== p.height;
-                            if (needConfig) {
+                            if (!h264Configured || decodedWidth !== p.width || decodedHeight !== p.height) {
                                 if (decoder.state === "configured") {
                                     decoder.close();
                                     decoder = null;
@@ -2521,8 +2636,7 @@ const SHARE_JS: &str = r##"
                                 }
                                 decodedWidth = p.width;
                                 decodedHeight = p.height;
-                                awaitingKey = true;
-                                decoder.configure({
+                                var cfg = {
                                     codec: codecString(bytes),
                                     codedWidth: p.width,
                                     codedHeight: p.height,
@@ -2530,16 +2644,26 @@ const SHARE_JS: &str = r##"
                                     colorSpace: {
                                         primaries: "bt709",
                                         transfer: "bt709",
-                                        matrix: "bt709",
-                                        fullRange: false
+                                        matrix: "bt709"
                                     },
                                     optimizeForLatency: true
-                                });
-                            }
-                            // 最初のキーフレーム（SPS/PPS/IDR）が来るまではデコードしない
-                            if (awaitingKey) {
-                                if (!p.key) return;
-                                awaitingKey = false;
+                                };
+                                try {
+                                    decoder.configure(cfg);
+                                } catch (cfgErr) {
+                                    delete cfg.colorSpace;
+                                    decoder.configure(cfg);
+                                }
+                                h264Configured = true;
+                                try { invoke("js_guard_error", { message: "h264 configured codec=" + cfg.codec + " " + p.width + "x" + p.height }); } catch (e2) { }
+                                if (!fallbackTimer) {
+                                    fallbackTimer = setTimeout(function () {
+                                        if (h264Frames === 0) {
+                                            guard("h264 no frame in 4s; falling back to JPEG");
+                                            try { invoke("request_jpeg_fallback"); } catch (e3) { }
+                                        }
+                                    }, 4000);
+                                }
                             }
                             decoder.decode(new EncodedVideoChunk({
                                 type: p.key ? "key" : "delta",
