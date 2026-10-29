@@ -62,6 +62,8 @@ struct Config {
     screen_share_bitrate_kbps: u32,
     /// 配信の最大fps
     screen_share_max_fps: u32,
+    /// 負荷に応じた自動画質調整（既定OFF）
+    auto_quality_adjust: bool,
 }
 
 impl Default for Config {
@@ -84,6 +86,7 @@ impl Default for Config {
             screen_share_codec: "auto".to_string(),
             screen_share_bitrate_kbps: 6000,
             screen_share_max_fps: 30,
+            auto_quality_adjust: false,
         }
     }
 }
@@ -132,6 +135,7 @@ fn main() {
             capture_start,
             request_jpeg_fallback,
             selected_size,
+            save_and_restart,
             probe_save,
             capture_stop,
             js_guard_error,
@@ -437,8 +441,36 @@ fn save_settings(app: AppHandle, settings: Config) {
 }
 
 #[tauri::command]
+fn save_and_restart(app: AppHandle, settings: Config) {
+    let zoom = settings.zoom.clamp(0.5, 2.0);
+    update_config(move |c| {
+        *c = settings;
+        c.zoom = zoom;
+        true
+    });
+    log("settings saved; restarting");
+    let _ = app.emit("fastdisc://restarting", ());
+    std::thread::sleep(Duration::from_millis(300));
+    app.restart();
+}
+
+#[tauri::command]
 fn clear_cache_now(app: AppHandle) {
     clear_cache_for(&app);
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(800));
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.with_webview(|webview| {
+                let controller = webview.controller();
+                if let Ok(core) = (unsafe { controller.CoreWebView2() }) {
+                    collect_garbage(&core);
+                }
+            });
+        }
+        let _ = handle.emit("fastdisc://cache-cleared", ());
+        log("cache cleared (notified)");
+    });
 }
 
 #[tauri::command]
@@ -2234,7 +2266,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                 } else {
                     self.cost_ema * 0.8 + cost * 0.2
                 };
-                if self.last_adjust.elapsed() > Duration::from_secs(2) {
+                if cfg.auto_quality_adjust && self.last_adjust.elapsed() > Duration::from_secs(2) {
                     self.last_adjust = std::time::Instant::now();
                     let budget = 1000.0 / self.fps.max(1) as f32;
                     let gpu = gpu_encoder_utilization().unwrap_or(0);

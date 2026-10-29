@@ -13,6 +13,7 @@ description = "設定ウィンドウから設定を読み書きするための�
 commands.allow = [
     "get_settings",
     "save_settings",
+    "save_and_restart",
     "debug_log",
     "clear_cache_now",
     "close_settings",
@@ -27,6 +28,7 @@ description = "Discord の設定画面に埋め込んだ RustCord 設定から�
 commands.allow = [
     "get_settings",
     "save_settings",
+    "save_and_restart",
     "set_zoom",
     "clear_cache_now",
     "get_autostart",

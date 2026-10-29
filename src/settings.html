@@ -150,6 +150,12 @@
                 <div class="hint" data-i18n="bitrate.hint"></div>
             </div>
             <input type="number" id="screenShareBitrateKbps" min="500" max="30000" step="500" />
+        </div>        <div class="row">
+            <div class="label">
+                <span data-i18n="autoQuality.label"></span>
+                <div class="hint" data-i18n="autoQuality.hint"></div>
+            </div>
+            <input type="checkbox" id="autoQualityAdjust" />
         </div>
     </div>
     <div class="group">
@@ -268,6 +274,7 @@
 
     <div class="actions">
         <button class="secondary" id="clearNow" data-i18n="clearNow"></button>
+        <button id="saveRestart" data-i18n="saveRestart"></button>
         <button id="close" data-i18n="close"></button>
     </div>
     <div class="status" id="status"></div>
@@ -328,6 +335,9 @@
                 "codec.jpeg": "JPEG (legacy)",
                 "bitrate.label": "Bitrate (kbps)",
                 "bitrate.hint": "Used by H.264 encoding. 6000 is a good default for 1080p30.",
+                "autoQuality.label": "Adaptive quality",
+                "autoQuality.hint": "Lowers bitrate/fps automatically under load (off = fixed quality).",
+                "saveRestart": "Save and restart",
                 "shareMode.browser": "Browser (native)",
                 "mem.focused": "Memory target: focused",
                 "mem.unfocused": "Memory target: unfocused",
@@ -386,6 +396,9 @@
                 "codec.jpeg": "JPEG（従来）",
                 "bitrate.label": "ビットレート（kbps）",
                 "bitrate.hint": "H.264エンコードで使用します。1080p30なら6000が目安です。",
+                "autoQuality.label": "自動画質調整",
+                "autoQuality.hint": "負荷に応じてビットレートとfpsを自動で下げます（OFFで固定画質）。",
+                "saveRestart": "保存して再起動",
                 "shareMode.browser": "ブラウザ（標準）",
                 "mem.focused": "メモリ目標: フォーカス時",
                 "mem.unfocused": "メモリ目標: 非フォーカス時",
@@ -396,7 +409,7 @@
             }
         };
 
-        const fields = ["clearCacheOnNavigation", "clearCacheOnChannelChange", "reloadOnChannelSwitch", "startMinimized", "minimizeToTray", "hardwareAcceleration"];
+        const fields = ["clearCacheOnNavigation", "clearCacheOnChannelChange", "reloadOnChannelSwitch", "startMinimized", "minimizeToTray", "hardwareAcceleration", "autoQualityAdjust"];
         const $ = id => document.getElementById(id);
 
         let settings = null;
@@ -438,6 +451,7 @@
             $("screenShareMode").value = s.screenShareMode || "rust";
             $("screenShareCodec").value = s.screenShareCodec || "auto";
             $("screenShareBitrateKbps").value = s.screenShareBitrateKbps || 6000;
+            $("autoQualityAdjust").checked = !!s.autoQualityAdjust;
             var customName = s.customMemoryName || "Custom";
             ["memFocused", "memUnfocused", "memMinimized"].forEach(function (id) {
                 var sel = $(id);
@@ -458,8 +472,6 @@
                 clearCacheOnNavigation: $("clearCacheOnNavigation").checked,
                 clearCacheOnChannelChange: $("clearCacheOnChannelChange").checked,
                 reloadOnChannelSwitch: $("reloadOnChannelSwitch").checked,
-                suspendOnMinimize: $("suspendOnMinimize").checked,
-                lowMemoryOnBlur: $("lowMemoryOnBlur").checked,
                 startMinimized: $("startMinimized").checked,
                 minimizeToTray: $("minimizeToTray").checked,
                 hardwareAcceleration: $("hardwareAcceleration").checked,
@@ -470,6 +482,7 @@
                 screenShareMode: $("screenShareMode").value,
                 screenShareCodec: $("screenShareCodec").value,
                 screenShareBitrateKbps: Number($("screenShareBitrateKbps").value) || 6000,
+                autoQualityAdjust: $("autoQualityAdjust").checked,
                 memFocused: $("memFocused").value,
                 memUnfocused: $("memUnfocused").value,
                 memMinimized: $("memMinimized").value
@@ -530,12 +543,32 @@
         $("screenShareMode").addEventListener("change", save);
         $("screenShareCodec").addEventListener("change", save);
         $("screenShareBitrateKbps").addEventListener("change", save);
+        $("autoQualityAdjust").addEventListener("change", save);
+        $("saveRestart").addEventListener("click", async () => {
+            const payload = collect();
+            try {
+                await invoke("save_and_restart", { settings: payload });
+            } catch (e) {
+                $("status").textContent = t("status.saveError") + e;
+            }
+        });
 
         $("clearNow").addEventListener("click", async () => {
-            await invoke("clear_cache_now");
-            $("status").textContent = t("status.cacheCleared");
-            setTimeout(() => ($("status").textContent = ""), 1500);
+            $("status").textContent = "…";
+            try {
+                await invoke("clear_cache_now");
+            } catch (e) {
+                $("status").textContent = "キャッシュ削除に失敗: " + e;
+            }
         });
+        try {
+            if (tauriApi.event && tauriApi.event.listen) {
+                tauriApi.event.listen("fastdisc://cache-cleared", function () {
+                    $("status").textContent = t("status.cacheCleared");
+                    setTimeout(() => ($("status").textContent = ""), 1500);
+                });
+            }
+        } catch (e) { }
 
         $("close").addEventListener("click", () => invoke("close_settings"));
 
