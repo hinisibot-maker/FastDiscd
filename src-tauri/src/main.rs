@@ -101,6 +101,7 @@ fn main() {
             show_source_picker,
             select_source,
             selection_state,
+            reset_selection,
             close_picker,
 
 
@@ -987,6 +988,13 @@ fn close_picker(app: AppHandle) {
     let _ = app.emit("fastdisc://source-cancelled", ());
 }
 #[tauri::command]
+fn reset_selection() {
+    *SELECTED_SOURCE.lock().unwrap() = None;
+    *SELECTED_WINDOW.lock().unwrap() = None;
+    *SELECTED_MONITOR.lock().unwrap() = None;
+}
+
+#[tauri::command]
 fn selection_state() -> bool {
     SELECTED_SOURCE.lock().map(|s| s.is_some()).unwrap_or(false)
 }
@@ -1835,6 +1843,7 @@ const SHARE_JS: &str = r##"
                     try { invoke("js_guard_error", { message: "getDisplayMedia called" }); } catch (e) { }
                     return invoke("list_sources").then(function (sources) {
                         if (!sources || sources.length <= 1) return;
+                        try { invoke("reset_selection"); } catch (e) { }
                         return new Promise(function (resolve) {
                             try { invoke("js_guard_error", { message: "showing picker n=" + sources.length }); } catch (e) { }
                             invoke("show_source_picker").catch(function (e) {
