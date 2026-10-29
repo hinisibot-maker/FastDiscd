@@ -123,6 +123,16 @@
             </div>
             <input type="checkbox" id="screenShare" />
         </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="shareMode.label"></span>
+                <div class="hint" data-i18n="shareMode.hint"></div>
+            </div>
+            <select id="screenShareMode">
+                <option value="rust" data-i18n="shareMode.rust"></option>
+                <option value="browser" data-i18n="shareMode.browser"></option>
+            </select>
+        </div>
     </div>
     <div class="group">
         <div class="row">
@@ -281,6 +291,10 @@
                 "ptt.none": "Not set",
                 "share.label": "Screen sharing (experimental)",
                 "share.hint": "Uses a custom capture pipeline. May be unstable, especially in app mode.",
+                "shareMode.label": "Capture method",
+                "shareMode.hint": "Rust capture is the default. Browser uses Discord/web native capture (may not work in WebView2).",
+                "shareMode.rust": "Rust capture (recommended)",
+                "shareMode.browser": "Browser (native)",
                 "mem.focused": "Memory target: focused",
                 "mem.unfocused": "Memory target: unfocused",
                 "mem.minimized": "Memory target: minimized",
@@ -325,7 +339,11 @@
                 "status.capture": "キーを押してください…（Escで解除）",
                 "ptt.none": "未設定",
                 "share.label": "画面共有（実験的）",
-                "share.hint": "独自キャプチャで配信します。不安定な場合があります（特にアプリモード）。",
+                "share.hint": "独自キャプチャで配信します。不安定な場合があります。",
+                "shareMode.label": "キャプチャ方式",
+                "shareMode.hint": "Rust（独自）が既定です。ブラウザはDiscord標準のキャプチャを使います（WebView2では動かない場合があります）。",
+                "shareMode.rust": "Rust（推奨）",
+                "shareMode.browser": "ブラウザ（標準）",
                 "mem.focused": "メモリ目標: フォーカス時",
                 "mem.unfocused": "メモリ目標: 非フォーカス時",
                 "mem.minimized": "メモリ目標: 最小化時",
@@ -374,6 +392,7 @@
             $("zoom").value = s.zoom;
             $("language").value = s.language || "auto";
             $("screenShare").checked = !!s.screenShare;
+            $("screenShareMode").value = s.screenShareMode || "rust";
             var customName = s.customMemoryName || "Custom";
             ["memFocused", "memUnfocused", "memMinimized"].forEach(function (id) {
                 var sel = $(id);
@@ -402,6 +421,7 @@
                 pushToTalkCode: pttCode,
                 language: $("language").value,
                 screenShare: $("screenShare").checked,
+                screenShareMode: $("screenShareMode").value,
                 memFocused: $("memFocused").value,
                 memUnfocused: $("memUnfocused").value,
                 memMinimized: $("memMinimized").value
@@ -459,6 +479,7 @@
             }
         });
         $("screenShare").addEventListener("change", save);
+        $("screenShareMode").addEventListener("change", save);
 
         $("clearNow").addEventListener("click", async () => {
             await invoke("clear_cache_now");

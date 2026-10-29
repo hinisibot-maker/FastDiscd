@@ -49,6 +49,8 @@ struct Config {
     language: String,
     /// 画面共有（実験的）
     screen_share: bool,
+    /// 画面共有の方式: "rust" (独自キャプチャ) / "browser" (Discord/ブラウザ標準)
+    screen_share_mode: String,
 }
 
 impl Default for Config {
@@ -66,6 +68,7 @@ impl Default for Config {
             hardware_acceleration: true,
             language: "auto".to_string(),
             screen_share: false,
+            screen_share_mode: "rust".to_string(),
         }
     }
 }
@@ -1499,6 +1502,7 @@ const SHARE_JS: &str = r##"
     invoke("get_settings").then(function (s) {
         window.__fastdiscSettings = s;
         if (!s.screenShare) return;
+        if ((s.screenShareMode || "rust") !== "rust") return;
         installCapture();
     }).catch(function () { });
 })();
