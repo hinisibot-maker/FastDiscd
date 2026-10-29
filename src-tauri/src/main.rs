@@ -1057,13 +1057,61 @@ fn disable_screen_share() {
 }
 
 fn capture_loop(app: AppHandle) {
+    let mut width = 1280i32;
+    let mut height = 720i32;
+    let mut delay = 66u64; // ~15fps target
+    let mut last_gpu_check = std::time::Instant::now() - Duration::from_secs(30);
+
     while CAPTURING.load(std::sync::atomic::Ordering::SeqCst) {
-        if let Some(frame) = grab_screen_jpeg(1280, 720) {
+        // GPU（ビデオエンコーダー）負荷が高いときは配信を弱めてゲームを優先
+        if last_gpu_check.elapsed() > Duration::from_secs(10) {
+            last_gpu_check = std::time::Instant::now();
+            if let Some(util) = gpu_encoder_utilization() {
+                if util >= 70 {
+                    width = 960;
+                    height = 540;
+                    delay = 200; // 5fps
+                } else if util <= 40 {
+                    width = 1280;
+                    height = 720;
+                    delay = 66;
+                }
+                log(&format!("gpu encoder util={util}% -> {width}x{height} delay={delay}ms"));
+            }
+        }
+
+        let started = std::time::Instant::now();
+        if let Some(frame) = grab_screen_jpeg(width, height) {
             let payload = base64::engine::general_purpose::STANDARD.encode(frame);
             let _ = app.emit("fastdisc://frame", payload);
         }
-        std::thread::sleep(Duration::from_millis(110));
+
+        let cost = started.elapsed().as_millis() as u64;
+        if cost > delay {
+            delay = (delay * 3 / 2).min(300);
+        } else if cost * 2 < delay {
+            delay = (delay * 3 / 4).max(50);
+        }
+
+        std::thread::sleep(Duration::from_millis(delay));
     }
+}
+
+/// NVIDIA のビデオエンコーダー使用率（%）。取得できない環境では None。
+fn gpu_encoder_utilization() -> Option<u32> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=utilization.encoder", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .next()?
+        .trim()
+        .parse::<u32>()
+        .ok()
 }
 
 #[cfg(windows)]

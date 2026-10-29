@@ -74,8 +74,8 @@ The Electron client bundles Chromium and Node.js with every app. FastDiscd inste
 
 | State | Total memory |
 | --- | --- |
-| **Unfocused (working in another window)** | **~107 MB** |
-| **Focused (normal use)** | **~414 MB** |
+| **Unfocused (working in another window)** | **~130–210 MB** (aggressive release every 5 s) |
+| **Focused (normal use)** | **~386 MB** |
 | Reference: official Discord (Electron) | ~1,000–1,500 MB |
 
 **Unfocused (107.1 MB) breakdown**
