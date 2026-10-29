@@ -146,6 +146,19 @@
         </div>
         <div class="row">
             <div class="label">
+                <span data-i18n="encoder.label"></span>
+                <div class="hint" data-i18n="encoder.hint"></div>
+            </div>
+            <select id="screenShareEncoder">
+                <option value="auto" data-i18n="encoder.auto"></option>
+                <option value="nvenc">NVENC (NVIDIA)</option>
+                <option value="qsv">Intel Quick Sync</option>
+                <option value="amf">AMD AMF</option>
+                <option value="software" data-i18n="encoder.software"></option>
+            </select>
+        </div>
+        <div class="row">
+            <div class="label">
                 <span data-i18n="bitrate.label"></span>
                 <div class="hint" data-i18n="bitrate.hint"></div>
             </div>
@@ -335,6 +348,10 @@
                 "codec.jpeg": "JPEG (legacy)",
                 "bitrate.label": "Bitrate (kbps)",
                 "bitrate.hint": "Used by H.264 encoding. 6000 is a good default for 1080p30.",
+                "encoder.label": "Encoder",
+                "encoder.hint": "Auto picks the GPU encoder (NVENC / Quick Sync / AMF).",
+                "encoder.auto": "Auto",
+                "encoder.software": "Software (CPU)",
                 "autoQuality.label": "Adaptive quality",
                 "autoQuality.hint": "Lowers bitrate/fps automatically under load (off = fixed quality).",
                 "saveRestart": "Save and restart",
@@ -396,6 +413,10 @@
                 "codec.jpeg": "JPEG（従来）",
                 "bitrate.label": "ビットレート（kbps）",
                 "bitrate.hint": "H.264エンコードで使用します。1080p30なら6000が目安です。",
+                "encoder.label": "エンコーダー",
+                "encoder.hint": "自動はGPUのエンコーダー（NVENC / Quick Sync / AMF）を選びます。",
+                "encoder.auto": "自動",
+                "encoder.software": "ソフトウェア（CPU）",
                 "autoQuality.label": "自動画質調整",
                 "autoQuality.hint": "負荷に応じてビットレートとfpsを自動で下げます（OFFで固定画質）。",
                 "saveRestart": "保存して再起動",
@@ -452,6 +473,7 @@
             $("screenShareCodec").value = s.screenShareCodec || "auto";
             $("screenShareBitrateKbps").value = s.screenShareBitrateKbps || 6000;
             $("autoQualityAdjust").checked = !!s.autoQualityAdjust;
+            $("screenShareEncoder").value = s.screenShareEncoder || "auto";
             var customName = s.customMemoryName || "Custom";
             ["memFocused", "memUnfocused", "memMinimized"].forEach(function (id) {
                 var sel = $(id);
@@ -483,6 +505,7 @@
                 screenShareCodec: $("screenShareCodec").value,
                 screenShareBitrateKbps: Number($("screenShareBitrateKbps").value) || 6000,
                 autoQualityAdjust: $("autoQualityAdjust").checked,
+                screenShareEncoder: $("screenShareEncoder").value,
                 memFocused: $("memFocused").value,
                 memUnfocused: $("memUnfocused").value,
                 memMinimized: $("memMinimized").value
@@ -544,6 +567,7 @@
         $("screenShareCodec").addEventListener("change", save);
         $("screenShareBitrateKbps").addEventListener("change", save);
         $("autoQualityAdjust").addEventListener("change", save);
+        $("screenShareEncoder").addEventListener("change", save);
         $("saveRestart").addEventListener("click", async () => {
             const payload = collect();
             try {

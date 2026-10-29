@@ -64,6 +64,8 @@ struct Config {
     screen_share_max_fps: u32,
     /// 負荷に応じた自動画質調整（既定OFF）
     auto_quality_adjust: bool,
+    /// 使用するエンコーダ: auto / nvenc / qsv / amf / software
+    screen_share_encoder: String,
 }
 
 impl Default for Config {
@@ -87,6 +89,7 @@ impl Default for Config {
             screen_share_bitrate_kbps: 6000,
             screen_share_max_fps: 30,
             auto_quality_adjust: false,
+            screen_share_encoder: "auto".to_string(),
         }
     }
 }
@@ -1844,6 +1847,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                     height,
                     cfg.screen_share_max_fps.clamp(5, 5),
                     cfg.screen_share_bitrate_kbps.max(500),
+                    &cfg.screen_share_encoder,
                 )
                 .map(encoder::ActiveEncoder::Ffmpeg)
                 .or_else(|| {
@@ -2197,7 +2201,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             let mut guard = ENCODER.lock().unwrap();
             if guard.is_none() {
                 log(&format!("h264 create begin {width}x{height}"));
-                let created = encoder::FfmpegEncoder::create(width, height, self.fps, self.bitrate)
+                let created = encoder::FfmpegEncoder::create(width, height, self.fps, self.bitrate, &cfg.screen_share_encoder)
                     .map(encoder::ActiveEncoder::Ffmpeg)
                     .or_else(|| {
                         encoder::H264Encoder::create(width, height, self.fps, self.bitrate)

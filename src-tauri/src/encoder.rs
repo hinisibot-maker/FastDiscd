@@ -575,11 +575,27 @@ fn available_encoders(ffmpeg: &std::path::Path) -> Vec<String> {
 }
 
 impl FfmpegEncoder {
-    pub fn create(width: i32, height: i32, fps: u32, bitrate_kbps: u32) -> Option<Self> {
+    pub fn create(width: i32, height: i32, fps: u32, bitrate_kbps: u32, preferred: &str) -> Option<Self> {
         let ffmpeg = find_ffmpeg()?;
         let width = (width.max(16) + 1) & !1;
         let height = (height.max(16) + 1) & !1;
-        for encoder in available_encoders(&ffmpeg) {
+        let mut encoders = available_encoders(&ffmpeg);
+        let pref = match preferred {
+            "nvenc" => "h264_nvenc",
+            "qsv" => "h264_qsv",
+            "amf" => "h264_amf",
+            "software" => "libx264",
+            _ => "",
+        };
+        if !pref.is_empty() {
+            if let Some(pos) = encoders.iter().position(|e| e == pref) {
+                let chosen = encoders.remove(pos);
+                encoders.insert(0, chosen);
+            } else {
+                crate::log(&format!("requested encoder {pref} not available; using auto"));
+            }
+        }
+        for encoder in encoders {
             let mut cmd = std::process::Command::new(&ffmpeg);
             cmd.args([
                 "-hide_banner",
