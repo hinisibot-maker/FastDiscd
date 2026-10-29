@@ -1082,9 +1082,9 @@ fn disable_screen_share() {
 }
 
 fn capture_loop(app: AppHandle) {
-    let mut width = 1280i32;
-    let mut height = 720i32;
-    let mut delay = 66u64; // ~15fps target
+    let mut width = 1024i32;
+    let mut height = 576i32;
+    let mut delay = 50u64; // ~20fps target when GPU is free
     let mut last_gpu_check = std::time::Instant::now() - Duration::from_secs(30);
 
     while CAPTURING.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1097,9 +1097,9 @@ fn capture_loop(app: AppHandle) {
                     height = 540;
                     delay = 200; // 5fps
                 } else if util <= 40 {
-                    width = 1280;
-                    height = 720;
-                    delay = 66;
+                    width = 1024;
+                    height = 576;
+                    delay = 50;
                 }
                 log(&format!("gpu encoder util={util}% -> {width}x{height} delay={delay}ms"));
             }
@@ -1124,10 +1124,15 @@ fn capture_loop(app: AppHandle) {
 
 /// NVIDIA のビデオエンコーダー使用率（%）。取得できない環境では None。
 fn gpu_encoder_utilization() -> Option<u32> {
-    let output = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=utilization.encoder", "--format=csv,noheader,nounits"])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("nvidia-smi");
+    cmd.args(["--query-gpu=utilization.encoder", "--format=csv,noheader,nounits"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1482,7 +1487,7 @@ const SHARE_JS: &str = r##"
                 configurable: true,
                 value: function () {
                     return ensure().then(function () {
-                        var stream = canvas.captureStream(10);
+                        var stream = canvas.captureStream(30);
                         var track = stream.getVideoTracks()[0];
                         if (track) {
                             try { track.contentHint = "detail"; } catch (e) { }
