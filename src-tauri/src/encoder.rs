@@ -473,6 +473,7 @@ pub struct FfmpegEncoder {
     width: i32,
     height: i32,
     bitrate_kbps: u32,
+    fps: u32,
     pub name: String,
 }
 
@@ -580,7 +581,7 @@ fn available_encoders(ffmpeg: &std::path::Path) -> Vec<String> {
 }
 
 impl FfmpegEncoder {
-    pub fn create(width: i32, height: i32, fps: u32, bitrate_kbps: u32, preferred: &str) -> Option<Self> {
+    pub fn create(width: i32, height: i32, fps: u32, bitrate_kbps: u32, preferred: &str, quality: &str) -> Option<Self> {
         let ffmpeg = find_ffmpeg()?;
         let width = (width.max(16) + 1) & !1;
         let height = (height.max(16) + 1) & !1;
@@ -621,16 +622,36 @@ impl FfmpegEncoder {
             ]);
             match encoder.as_str() {
                 "h264_nvenc" => {
-                    cmd.args(["-preset", "p1", "-tune", "ll", "-rc", "cbr", "-bf", "0", "-zerolatency", "1", "-rc-lookahead", "0"]);
+                    let preset = match quality {
+                        "speed" => "p1",
+                        "quality" => "p6",
+                        _ => "p4",
+                    };
+                    cmd.args(["-preset", preset, "-tune", "ll", "-rc", "cbr", "-bf", "0", "-zerolatency", "1", "-rc-lookahead", "0"]);
                 }
                 "h264_qsv" => {
-                    cmd.args(["-preset", "veryfast", "-bf", "0"]);
+                    let preset = match quality {
+                        "speed" => "veryfast",
+                        "quality" => "slow",
+                        _ => "medium",
+                    };
+                    cmd.args(["-preset", preset, "-bf", "0"]);
                 }
                 "h264_amf" => {
-                    cmd.args(["-quality", "speed", "-rc", "cbr", "-bf", "0"]);
+                    let q = match quality {
+                        "speed" => "speed",
+                        "quality" => "quality",
+                        _ => "balanced",
+                    };
+                    cmd.args(["-quality", q, "-rc", "cbr", "-bf", "0"]);
                 }
                 _ => {
-                    cmd.args(["-preset", "veryfast", "-tune", "zerolatency"]);
+                    let preset = match quality {
+                        "speed" => "ultrafast",
+                        "quality" => "medium",
+                        _ => "veryfast",
+                    };
+                    cmd.args(["-preset", preset, "-tune", "zerolatency"]);
                 }
             }
             cmd.args([
@@ -707,6 +728,7 @@ impl FfmpegEncoder {
                 width,
                 height,
                 bitrate_kbps,
+                fps,
                 name: encoder,
             });
         }
@@ -723,6 +745,10 @@ impl FfmpegEncoder {
 
     pub fn bitrate_kbps(&self) -> u32 {
         self.bitrate_kbps
+    }
+
+    pub fn fps(&self) -> u32 {
+        self.fps
     }
 
     pub fn encode_nv12(&mut self, nv12: &[u8]) -> Vec<Vec<u8>> {
@@ -768,6 +794,13 @@ impl ActiveEncoder {
         match self {
             Self::Mf(e) => e.bitrate_kbps(),
             Self::Ffmpeg(e) => e.bitrate_kbps(),
+        }
+    }
+
+    pub fn fps(&self) -> u32 {
+        match self {
+            Self::Mf(e) => 0,
+            Self::Ffmpeg(e) => e.fps(),
         }
     }
 

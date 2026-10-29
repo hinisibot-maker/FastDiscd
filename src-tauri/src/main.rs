@@ -62,6 +62,8 @@ struct Config {
     auto_quality_adjust: bool,
     /// 使用するエンコーダ: auto / nvenc / qsv / amf / software
     screen_share_encoder: String,
+    /// 画質: speed / balanced / quality
+    screen_share_quality: String,
 }
 
 impl Default for Config {
@@ -84,6 +86,7 @@ impl Default for Config {
             screen_share_max_fps: 30,
             auto_quality_adjust: false,
             screen_share_encoder: "auto".to_string(),
+            screen_share_quality: "balanced".to_string(),
         }
     }
 }
@@ -1845,6 +1848,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                     cfg.screen_share_max_fps.clamp(5, 5),
                     cfg.screen_share_bitrate_kbps.max(500),
                     &cfg.screen_share_encoder,
+                    &cfg.screen_share_quality,
                 )
                 .map(encoder::ActiveEncoder::Ffmpeg)
                 .or_else(|| {
@@ -2175,6 +2179,7 @@ struct WgcHandler {
     last_adjust: std::time::Instant,
     last_emit: std::time::Instant,
     cost_ema: f32,
+    started_at: std::time::Instant,
     out_chunks: u64,
     out_bytes: u64,
     gate: H264Gate,
@@ -2196,6 +2201,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             last_adjust: std::time::Instant::now(),
             last_emit: std::time::Instant::now() - Duration::from_secs(1),
             cost_ema: 0.0,
+            started_at: std::time::Instant::now(),
             out_chunks: 0,
             out_bytes: 0,
             gate: H264Gate::new(),
@@ -2224,6 +2230,9 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             && !FORCE_JPEG.load(std::sync::atomic::Ordering::SeqCst);
 
         if want_h264 {
+            if !cfg.auto_quality_adjust {
+                self.fps = cfg.screen_share_max_fps.clamp(5, 60);
+            }
             // 目標fpsに合わせて間引く（負荷時は fps を下げる）
             let min_interval = Duration::from_millis(1000 / self.fps.max(1) as u64);
             if !self.first && self.last_emit.elapsed() < min_interval {
@@ -2233,7 +2242,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             let mut guard = ENCODER.lock().unwrap();
             if guard.is_none() {
                 log(&format!("h264 create begin {width}x{height}"));
-                let created = encoder::FfmpegEncoder::create(width, height, self.fps, self.bitrate, &cfg.screen_share_encoder)
+                let created = encoder::FfmpegEncoder::create(width, height, self.fps, self.bitrate, &cfg.screen_share_encoder, &cfg.screen_share_quality)
                     .map(encoder::ActiveEncoder::Ffmpeg)
                     .or_else(|| {
                         encoder::H264Encoder::create(width, height, self.fps, self.bitrate)
@@ -2278,11 +2287,14 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             }
             if let Some(enc) = guard.as_mut() {
                 let want_bitrate = cfg.screen_share_bitrate_kbps.max(500);
-                if enc.bitrate_kbps() != want_bitrate {
+                let want_fps = cfg.screen_share_max_fps.clamp(5, 60);
+                if enc.bitrate_kbps() != want_bitrate || (enc.fps() != 0 && enc.fps() != want_fps) {
                     log(&format!(
-                        "h264 bitrate change: {} -> {}kbps (recreate)",
+                        "h264 settings change: {}->{}kbps {}->{}fps (recreate)",
                         enc.bitrate_kbps(),
-                        want_bitrate
+                        want_bitrate,
+                        enc.fps(),
+                        want_fps
                     ));
                     *guard = None;
                     self.gate.reset();
@@ -2365,9 +2377,12 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                     ));
                 }
                 if self.frames == 1 || self.frames % 120 == 0 {
+                    let secs = self.started_at.elapsed().as_secs_f32().max(0.001);
+                    let actual_fps = self.frames as f32 / secs;
                     log(&format!(
-                        "h264 frames={} {}x{} out_chunks={} out_kb={}",
+                        "h264 frames={} {:.1}fps {}x{} out_chunks={} out_kb={}",
                         self.frames,
+                        actual_fps,
                         width,
                         height,
                         self.out_chunks,

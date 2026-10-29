@@ -144,6 +144,29 @@
             </div>
             <input type="checkbox" id="autoQualityAdjust" />
         </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="fps.label"></span>
+                <div class="hint" data-i18n="fps.hint"></div>
+            </div>
+            <select id="screenShareMaxFps">
+                <option value="15">15</option>
+                <option value="24">24</option>
+                <option value="30">30</option>
+                <option value="60">60</option>
+            </select>
+        </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="quality.label"></span>
+                <div class="hint" data-i18n="quality.hint"></div>
+            </div>
+            <select id="screenShareQuality">
+                <option value="speed" data-i18n="quality.speed"></option>
+                <option value="balanced" data-i18n="quality.balanced"></option>
+                <option value="quality" data-i18n="quality.quality"></option>
+            </select>
+        </div>
     </div>
     <div class="group">
         <div class="row">
@@ -289,6 +312,13 @@
                 "encoder.hint": "Auto picks the GPU encoder (NVENC / Quick Sync / AMF).",
                 "encoder.auto": "Auto",
                 "encoder.software": "Software (CPU)",
+                "fps.label": "Target FPS",
+                "fps.hint": "30 is recommended. Higher uses more bandwidth.",
+                "quality.label": "Quality",
+                "quality.hint": "Speed = lighter, Quality = sharper.",
+                "quality.speed": "Speed",
+                "quality.balanced": "Balanced",
+                "quality.quality": "Quality",
                 "autoQuality.label": "Adaptive quality",
                 "autoQuality.hint": "Lowers bitrate/fps automatically under load (off = fixed quality).",
                 "saveRestart": "Save and restart",
@@ -354,6 +384,13 @@
                 "encoder.hint": "自動はGPUのエンコーダー（NVENC / Quick Sync / AMF）を選びます。",
                 "encoder.auto": "自動",
                 "encoder.software": "ソフトウェア（CPU）",
+                "fps.label": "目標FPS",
+                "fps.hint": "30がおすすめです。上げると通信量が増えます。",
+                "quality.label": "画質",
+                "quality.hint": "速度優先は軽量、画質優先はくっきりします。",
+                "quality.speed": "速度優先",
+                "quality.balanced": "バランス",
+                "quality.quality": "画質優先",
                 "autoQuality.label": "自動画質調整",
                 "autoQuality.hint": "負荷に応じてビットレートとfpsを自動で下げます（OFFで固定画質）。",
                 "saveRestart": "保存して再起動",
@@ -411,6 +448,8 @@
             $("screenShareBitrateKbps").value = s.screenShareBitrateKbps || 6000;
             $("autoQualityAdjust").checked = s.autoQualityAdjust === true;
             $("screenShareEncoder").value = s.screenShareEncoder || "auto";
+            $("screenShareMaxFps").value = String(s.screenShareMaxFps || 30);
+            $("screenShareQuality").value = s.screenShareQuality || "balanced";
             pttCode = s.pushToTalkCode || "";
             updateZoomLabel();
             applyLanguage();
@@ -433,6 +472,8 @@
                 screenShareBitrateKbps: Number($("screenShareBitrateKbps").value) || 6000,
                 autoQualityAdjust: $("autoQualityAdjust").checked,
                 screenShareEncoder: $("screenShareEncoder").value,
+                screenShareMaxFps: Number($("screenShareMaxFps").value) || 30,
+                screenShareQuality: $("screenShareQuality").value,
             };
         }
 
@@ -468,6 +509,8 @@
         $("screenShareBitrateKbps").addEventListener("change", save);
         $("autoQualityAdjust").addEventListener("change", save);
         $("screenShareEncoder").addEventListener("change", save);
+        $("screenShareMaxFps").addEventListener("change", save);
+        $("screenShareQuality").addEventListener("change", save);
         $("saveRestart").addEventListener("click", async () => {
             const payload = collect();
             try {
