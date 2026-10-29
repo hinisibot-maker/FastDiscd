@@ -956,6 +956,7 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, data: LPARAM) -> windows:
 
 #[tauri::command]
 fn show_source_picker(app: AppHandle) {
+    log("show_source_picker invoked");
     if let Some(window) = app.get_webview_window("picker") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -1839,7 +1840,9 @@ const SHARE_JS: &str = r##"
                         if (!sources || sources.length <= 1) return;
                         return new Promise(function (resolve) {
                             try { invoke("js_guard_error", { message: "showing picker n=" + sources.length }); } catch (e) { }
-                            invoke("show_source_picker");
+                            invoke("show_source_picker").catch(function (e) {
+                                try { invoke("js_guard_error", { message: "picker invoke failed: " + e }); } catch (e2) { }
+                            });
                             var tries = 0;
                             var timer = setInterval(function () {
                                 tries++;
