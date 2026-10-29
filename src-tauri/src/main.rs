@@ -32,10 +32,6 @@ struct Config {
     clear_cache_on_navigation: bool,
     /// チャンネル切替（SPA のルート変更）時に前ページのキャッシュを削除する
     clear_cache_on_channel_change: bool,
-    /// 最小化中に WebView をサスペンドする（既定 OFF / 通知が止まるため）
-    suspend_on_minimize: bool,
-    /// 非フォーカス時にメモリ目標を Low にする
-    low_memory_on_blur: bool,
     /// 表示倍率（Discord 側に拡大率設定が出ない環境向け）
     zoom: f64,
     /// グローバルに監視するプッシュトゥトークのキー（KeyboardEvent.code 形式。空で無効）
@@ -73,8 +69,6 @@ impl Default for Config {
         Self {
             clear_cache_on_navigation: true,
             clear_cache_on_channel_change: true,
-            suspend_on_minimize: false,
-            low_memory_on_blur: true,
             zoom: 1.0,
             push_to_talk_code: String::new(),
             start_with_windows: false,
@@ -101,6 +95,8 @@ static SELECTED_SOURCE: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sy
 static MAIN_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static ENCODER: std::sync::Mutex<Option<encoder::ActiveEncoder>> = std::sync::Mutex::new(None);
+static FRAME_CHANNEL: std::sync::Mutex<Option<tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>> =
+    std::sync::Mutex::new(None);
 static FORCE_JPEG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LAST_RAW_FRAME: std::sync::Mutex<Option<(Vec<u8>, i32, i32)>> = std::sync::Mutex::new(None);
 static LAST_H264_KEY: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
@@ -136,6 +132,7 @@ fn main() {
             set_autostart,
             get_discord_locale,
             capture_start,
+            capture_start_legacy,
             request_jpeg_fallback,
             selected_size,
             save_and_restart,
@@ -1899,8 +1896,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                     .encode(&rgb, width as u32, height as u32, image::ExtendedColorType::Rgb8)
                     .is_ok()
                 {
-                    let payload = base64::engine::general_purpose::STANDARD.encode(out);
-                    let _ = app.emit("fastdisc://frame", payload);
+                    send_frame(&app, 1, false, width, height, 0, &out);
                 }
             }
 
@@ -1934,7 +1930,23 @@ fn request_jpeg_fallback() {
 }
 
 #[tauri::command]
-fn capture_start(app: AppHandle) -> bool {
+fn capture_start_legacy(app: AppHandle) -> bool {
+    capture_start_inner(app, None)
+}
+
+#[tauri::command]
+fn capture_start(
+    app: AppHandle,
+    channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> bool {
+    capture_start_inner(app, Some(channel))
+}
+
+fn capture_start_inner(
+    app: AppHandle,
+    channel: Option<tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>,
+) -> bool {
+    *FRAME_CHANNEL.lock().unwrap() = channel;
     // 既存セッション（WGC / GDI）を必ず停止してから、選択中のソースで開始し直す
     CAPTURE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1968,6 +1980,7 @@ fn capture_start(app: AppHandle) -> bool {
 #[tauri::command]
 fn capture_stop() {
     CAPTURING.store(false, std::sync::atomic::Ordering::SeqCst);
+    *FRAME_CHANNEL.lock().unwrap() = None;
     *ENCODER.lock().unwrap() = None;
     if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
         let _ = control.stop();
@@ -2048,6 +2061,39 @@ struct H264Config {
 }
 
 /// SPS/PPS を保持し、IDR が来るまで出力を待つゲート
+
+/// 1フレームを送る（バイナリチャンネル優先、失敗時は従来イベント）
+fn send_frame(app: &AppHandle, codec: u8, key: bool, width: i32, height: i32, seq: u64, payload: &[u8]) {
+    if let Ok(guard) = FRAME_CHANNEL.lock() {
+        if let Some(channel) = guard.as_ref() {
+            let mut buf = Vec::with_capacity(16 + payload.len());
+            buf.extend_from_slice(b"FDF1");
+            buf.push(codec);
+            buf.push(if key { 1 } else { 0 });
+            buf.extend_from_slice(&(width as u16).to_le_bytes());
+            buf.extend_from_slice(&(height as u16).to_le_bytes());
+            buf.extend_from_slice(&(seq as u32).to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(payload);
+            if channel.send(tauri::ipc::InvokeResponseBody::Raw(buf)).is_ok() {
+                return;
+            }
+        }
+    }
+    if codec == 0 {
+        let chunk = H264Chunk {
+            seq,
+            key,
+            width,
+            height,
+            data: base64::engine::general_purpose::STANDARD.encode(payload),
+        };
+        let _ = app.emit("fastdisc://h264", chunk);
+    } else {
+        let data = base64::engine::general_purpose::STANDARD.encode(payload);
+        let _ = app.emit("fastdisc://frame", data);
+    }
+}
 struct H264Gate {
     sps_pps: Vec<u8>,
     config_sent: bool,
@@ -2102,30 +2148,16 @@ impl H264Gate {
             if LAST_H264_KEY.lock().map(|g| g.is_none()).unwrap_or(false) {
                 *LAST_H264_KEY.lock().unwrap() = Some(out.clone());
             }
-            let payload = H264Chunk {
-                seq: *seq,
-                key: true,
-                width,
-                height,
-                data: base64::engine::general_purpose::STANDARD.encode(&out),
-            };
+            send_frame(app, 0, true, width, height, *seq, &out);
             *seq += 1;
-            let _ = app.emit("fastdisc://h264", payload);
             if !self.got_key {
                 log(&format!("h264 first key chunk bytes={} {}x{}", out.len(), width, height));
             }
             self.got_key = true;
             true
         } else if self.got_key {
-            let payload = H264Chunk {
-                seq: *seq,
-                key: false,
-                width,
-                height,
-                data: base64::engine::general_purpose::STANDARD.encode(frame),
-            };
+            send_frame(app, 0, false, width, height, *seq, frame);
             *seq += 1;
-            let _ = app.emit("fastdisc://h264", payload);
             true
         } else {
             false
@@ -2245,6 +2277,18 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                 }
             }
             if let Some(enc) = guard.as_mut() {
+                let want_bitrate = cfg.screen_share_bitrate_kbps.max(500);
+                if enc.bitrate_kbps() != want_bitrate {
+                    log(&format!(
+                        "h264 bitrate change: {} -> {}kbps (recreate)",
+                        enc.bitrate_kbps(),
+                        want_bitrate
+                    ));
+                    *guard = None;
+                    self.gate.reset();
+                    self.first = true;
+                    return Ok(());
+                }
                 if let encoder::ActiveEncoder::Ffmpeg(ff) = enc {
                     if !ff.alive() {
                         log("ffmpeg exited; recreating encoder");
@@ -2496,8 +2540,7 @@ fn capture_loop(app: AppHandle, gen: u64) {
 
         let started = std::time::Instant::now();
         if let Some(frame) = grab_screen_jpeg(width, height) {
-            let payload = base64::engine::general_purpose::STANDARD.encode(frame);
-            let _ = app.emit("fastdisc://frame", payload);
+            send_frame(&app, 1, false, width, height, 0, &frame);
         }
 
         let cost = started.elapsed().as_millis() as u64;
@@ -2906,6 +2949,7 @@ const SHARE_JS: &str = r##"
         var h264Chunks = 0;
         var fallbackTimer = null;
         var currentTrack = null;
+        var frameChannel = null;
 
         // 共有のたびに比率・デコーダ状態をリセットする
         // 色検証: トレイメニューから要求されたらキャンバスをPNGで送る
@@ -2999,93 +3043,120 @@ const SHARE_JS: &str = r##"
             }
         }
 
+        function handleBinaryFrame(buf) {
+            try {
+                var dv = new DataView(buf);
+                if (dv.byteLength < 16 || dv.getUint32(0, true) !== 0x31464446) return;
+                var codec = dv.getUint8(4);
+                var key = (dv.getUint8(5) & 1) === 1;
+                var width = dv.getUint16(6, true);
+                var height = dv.getUint16(8, true);
+                var payload = new Uint8Array(buf, 16);
+                if (codec === 0) {
+                    feedH264(payload, key, width, height);
+                } else {
+                    feedJpeg(payload);
+                }
+            } catch (e) {
+                guard("binary frame: " + ((e && e.message) || e));
+            }
+        }
+        function feedH264(bytes, key, width, height) {
+            if (!usingH264) {
+                if (!setupH264()) return;
+                usingH264 = true;
+            }
+            if (!decoder) return;
+            if (decoder.decodeQueueSize > 8) return;
+            h264Chunks++;
+            try {
+                var sizeChanged = decodedWidth !== width || decodedHeight !== height;
+                if (sizeChanged && !key) return;
+                if (!h264Configured || sizeChanged) {
+                    if (decoder.state === "configured") {
+                        decoder.close();
+                        decoder = null;
+                        if (!setupH264()) return;
+                    }
+                    decodedWidth = width;
+                    decodedHeight = height;
+                    var cfg = {
+                        codec: codecString(bytes),
+                        codedWidth: width,
+                        codedHeight: height,
+                        avc: { format: "annexb" },
+                        colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709" },
+                        optimizeForLatency: true
+                    };
+                    try {
+                        decoder.configure(cfg);
+                    } catch (cfgErr) {
+                        delete cfg.colorSpace;
+                        decoder.configure(cfg);
+                    }
+                    h264Configured = true;
+                    try { invoke("js_guard_error", { message: "h264 configured codec=" + cfg.codec + " " + width + "x" + height }); } catch (e2) { }
+                    if (!fallbackTimer) {
+                        fallbackTimer = setTimeout(function () {
+                            if (h264Frames === 0) {
+                                guard("h264 no frame in 4s; falling back to JPEG");
+                                try { invoke("request_jpeg_fallback"); } catch (e3) { }
+                            }
+                        }, 4000);
+                    }
+                }
+                decoder.decode(new EncodedVideoChunk({
+                    type: key ? "key" : "delta",
+                    timestamp: performance.now() * 1000,
+                    data: bytes
+                }));
+            } catch (e) {
+                guard("h264 decode: " + ((e && e.message) || e));
+            }
+        }
+
+        function feedJpeg(bytes) {
+            if (usingH264) return;
+            var blob = new Blob([bytes], { type: "image/jpeg" });
+            createImageBitmap(blob).then(function (bmp) {
+                if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+                    canvas.width = bmp.width;
+                    canvas.height = bmp.height;
+                }
+                ctx.drawImage(bmp, 0, 0);
+                bmp.close();
+            }).catch(function () { });
+        }
         var listenerReady = null;
         function ensure() {
             if (!listenerReady) {
                 listening = true;
                 listenerReady = Promise.all([
                     tauri.event.listen("fastdisc://frame", function (event) {
-                        // H.264配信中はJPEGフレームを混ぜない（リサイズ時の変色防止）
-                        if (usingH264) return;
-                        var img = new Image();
-                        img.onload = function () {
-                            if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-                                canvas.width = img.naturalWidth;
-                                canvas.height = img.naturalHeight;
-                            }
-                            ctx.drawImage(img, 0, 0);
-                        };
-                        img.src = "data:image/jpeg;base64," + event.payload;
+                        var bytes;
+                        try { bytes = b64ToBytes(event.payload); } catch (e) { return; }
+                        feedJpeg(bytes);
                     }),
                     tauri.event.listen("fastdisc://h264", function (event) {
                         var p = event.payload;
-                        if (!usingH264) {
-                            if (!setupH264()) return;
-                            usingH264 = true;
-                        }
-                        if (!decoder) return;
-                        if (decoder.decodeQueueSize > 8) return;
                         var bytes;
-                        try {
-                            bytes = b64ToBytes(p.data);
-                        } catch (e) {
-                            return;
-                        }
-                        h264Chunks++;
-                        try {
-                            var sizeChanged = decodedWidth !== p.width || decodedHeight !== p.height;
-                            // 解像度変更直後はIDRが来るまで待つ（古いSPSで誤デコードしない）
-                            if (sizeChanged && !p.key) return;
-                            if (!h264Configured || sizeChanged) {
-                                if (decoder.state === "configured") {
-                                    decoder.close();
-                                    decoder = null;
-                                    if (!setupH264()) return;
-                                }
-                                decodedWidth = p.width;
-                                decodedHeight = p.height;
-                                var cfg = {
-                                    codec: codecString(bytes),
-                                    codedWidth: p.width,
-                                    codedHeight: p.height,
-                                    avc: { format: "annexb" },
-                                    colorSpace: {
-                                        primaries: "bt709",
-                                        transfer: "bt709",
-                                        matrix: "bt709"
-                                    },
-                                    optimizeForLatency: true
-                                };
-                                try {
-                                    decoder.configure(cfg);
-                                } catch (cfgErr) {
-                                    delete cfg.colorSpace;
-                                    decoder.configure(cfg);
-                                }
-                                h264Configured = true;
-                                try { invoke("js_guard_error", { message: "h264 configured codec=" + cfg.codec + " " + p.width + "x" + p.height }); } catch (e2) { }
-                                if (!fallbackTimer) {
-                                    fallbackTimer = setTimeout(function () {
-                                        if (h264Frames === 0) {
-                                            guard("h264 no frame in 4s; falling back to JPEG");
-                                            try { invoke("request_jpeg_fallback"); } catch (e3) { }
-                                        }
-                                    }, 4000);
-                                }
-                            }
-                            decoder.decode(new EncodedVideoChunk({
-                                type: p.key ? "key" : "delta",
-                                timestamp: performance.now() * 1000,
-                                data: bytes
-                            }));
-                        } catch (e) {
-                            guard("h264 decode: " + ((e && e.message) || e));
-                        }
+                        try { bytes = b64ToBytes(p.data); } catch (e) { return; }
+                        feedH264(bytes, p.key, p.width, p.height);
                     })
                 ]);
             }
             // 何回目の共有でも必ずキャプチャを（再）開始する
-            return Promise.resolve(listenerReady).then(function () { return invoke("capture_start"); });
+            return Promise.resolve(listenerReady).then(function () {
+                try {
+                    var Ch = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.Channel;
+                    if (Ch) {
+                        frameChannel = new Ch();
+                        frameChannel.onmessage = function (buf) { handleBinaryFrame(buf); };
+                        return invoke("capture_start", { channel: frameChannel });
+                    }
+                } catch (e) { guard("channel init: " + ((e && e.message) || e)); }
+                return invoke("capture_start_legacy");
+            });
         }
 
         var proto = Object.getPrototypeOf(navigator.mediaDevices);

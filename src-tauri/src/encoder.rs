@@ -184,6 +184,10 @@ impl H264Encoder {
         self.height
     }
 
+    pub fn bitrate_kbps(&self) -> u32 {
+        self.bitrate_kbps
+    }
+
     /// 解像度・ビットレートを変更する。失敗した場合は false（呼び出し側で作り直す）
     pub fn reconfigure(&mut self, width: i32, height: i32, bitrate_kbps: u32) -> bool {
         let width = (width.max(16) + 1) & !1;
@@ -468,6 +472,7 @@ pub struct FfmpegEncoder {
     rx: std::sync::mpsc::Receiver<Vec<u8>>,
     width: i32,
     height: i32,
+    bitrate_kbps: u32,
     pub name: String,
 }
 
@@ -616,7 +621,7 @@ impl FfmpegEncoder {
             ]);
             match encoder.as_str() {
                 "h264_nvenc" => {
-                    cmd.args(["-preset", "p1", "-tune", "ll", "-rc", "cbr", "-bf", "0"]);
+                    cmd.args(["-preset", "p1", "-tune", "ll", "-rc", "cbr", "-bf", "0", "-zerolatency", "1", "-rc-lookahead", "0"]);
                 }
                 "h264_qsv" => {
                     cmd.args(["-preset", "veryfast", "-bf", "0"]);
@@ -632,6 +637,8 @@ impl FfmpegEncoder {
                 "-b:v",
                 &format!("{bitrate_kbps}k"),
                 "-maxrate",
+                &format!("{bitrate_kbps}k"),
+                "-minrate",
                 &format!("{bitrate_kbps}k"),
                 "-bufsize",
                 &format!("{}k", bitrate_kbps * 2),
@@ -699,6 +706,7 @@ impl FfmpegEncoder {
                 rx,
                 width,
                 height,
+                bitrate_kbps,
                 name: encoder,
             });
         }
@@ -711,6 +719,10 @@ impl FfmpegEncoder {
 
     pub fn height(&self) -> i32 {
         self.height
+    }
+
+    pub fn bitrate_kbps(&self) -> u32 {
+        self.bitrate_kbps
     }
 
     pub fn encode_nv12(&mut self, nv12: &[u8]) -> Vec<Vec<u8>> {
@@ -749,6 +761,13 @@ impl ActiveEncoder {
         match self {
             Self::Mf(e) => e.width(),
             Self::Ffmpeg(e) => e.width(),
+        }
+    }
+
+    pub fn bitrate_kbps(&self) -> u32 {
+        match self {
+            Self::Mf(e) => e.bitrate_kbps(),
+            Self::Ffmpeg(e) => e.bitrate_kbps(),
         }
     }
 

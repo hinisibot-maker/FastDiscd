@@ -43,6 +43,7 @@ description = "画面共有（実験的）用"
 commands.allow = [
     "get_settings",
     "capture_start",
+    "capture_start_legacy",
     "capture_stop",
     "js_guard_error",
     "request_jpeg_fallback",

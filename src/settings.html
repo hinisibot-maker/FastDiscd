@@ -67,33 +67,7 @@
 
         .status { color: var(--muted); font-size: 12px; margin-top: 10px; min-height: 16px; }
     </style>
-    <div id="customModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;align-items:center;justify-content:center;">
-        <div style="width:420px;background:#2b2d31;border-radius:12px;padding:20px 22px;box-shadow:0 8px 32px rgba(0,0,0,.6);">
-            <div style="font-size:17px;font-weight:700;margin-bottom:14px;">カスタムメモリ設定</div>
-            <div class="row">
-                <div class="label">プリセット名<div class="hint">一覧に表示される名前</div></div>
-                <input type="text" id="cmName" maxlength="24" style="width:160px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
-            </div>
-            <div class="row">
-                <div class="label">メモリ目標</div>
-                <select id="cmLevel"><option value="normal">Normal</option><option value="low">Low</option></select>
-            </div>
-            <div class="row">
-                <div class="label">ワーキングセットを強制解放<div class="hint">指定時間後に物理メモリを返します</div></div>
-                <input type="checkbox" id="cmTrim" />
-            </div>
-            <div class="row">
-                <div class="label">待ち時間（秒）</div>
-                <input type="number" id="cmDelay" min="5" max="3600" step="5" style="width:100px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
-            </div>
-            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
-                <button class="secondary" id="cmCancel">閉じる</button>
-                <button id="cmSave">保存</button>
-            </div>
-            <div class="status" id="cmStatus"></div>
-        </div>
-    </div>
-<script>window.addEventListener('error',function(e){var d=document.createElement('div');d.style.cssText='position:fixed;left:0;bottom:0;background:#c00;color:#fff;font:12px monospace;padding:6px;z-index:99;max-width:100%';d.textContent='ERR: '+(e.message||'')+' @'+(e.lineno||0);document.body.appendChild(d);});</script>
+    <script>window.addEventListener('error',function(e){var d=document.createElement('div');d.style.cssText='position:fixed;left:0;bottom:0;background:#c00;color:#fff;font:12px monospace;padding:6px;z-index:99;max-width:100%';d.textContent='ERR: '+(e.message||'')+' @'+(e.lineno||0);document.body.appendChild(d);});</script>
 </head>
 
 <body>
@@ -192,43 +166,6 @@
                 <div class="hint" data-i18n="reloadChannel.hint"></div>
             </div>
             <input type="checkbox" id="reloadOnChannelSwitch" />
-        </div>
-    </div>
-
-    <div class="group">
-        <div class="row">
-            <div class="label">
-                <span data-i18n="mem.focused"></span>
-                <div class="hint" data-i18n="mem.hint"></div>
-            </div>
-            <select id="memFocused" class="memSelect">
-                <option value="normal">Normal</option>
-                <option value="low">Low</option>
-            </select>
-        </div>
-        <div class="row">
-            <div class="label"><span data-i18n="mem.unfocused"></span></div>
-            <select id="memUnfocused" class="memSelect">
-                <option value="normal">Normal</option>
-                <option value="low">Low</option>
-            </select>
-        </div>
-        <div class="row">
-            <div class="label"><span data-i18n="mem.minimized"></span></div>
-            <select id="memMinimized" class="memSelect">
-                <option value="normal">Normal</option>
-                <option value="low">Low</option>
-            </select>
-        </div>
-    </div>
-
-    <div class="group">
-        <div class="row">
-            <div class="label">
-                <span data-i18n="mem.custom"></span>
-                <div class="hint" data-i18n="mem.customHint"></div>
-            </div>
-            <button class="secondary" id="openCustom">＋</button>
         </div>
     </div>
 
@@ -472,18 +409,8 @@
             $("screenShareMode").value = s.screenShareMode || "rust";
             $("screenShareCodec").value = s.screenShareCodec || "auto";
             $("screenShareBitrateKbps").value = s.screenShareBitrateKbps || 6000;
-            $("autoQualityAdjust").checked = !!s.autoQualityAdjust;
+            $("autoQualityAdjust").checked = s.autoQualityAdjust === true;
             $("screenShareEncoder").value = s.screenShareEncoder || "auto";
-            var customName = s.customMemoryName || "Custom";
-            ["memFocused", "memUnfocused", "memMinimized"].forEach(function (id) {
-                var sel = $(id);
-                var opt = Array.prototype.find.call(sel.options, function (o) { return o.value === "custom"; });
-                if (!opt) { opt = new Option(customName, "custom"); sel.add(opt); }
-                else opt.textContent = customName;
-            });
-            $("memFocused").value = s.memFocused || "normal";
-            $("memUnfocused").value = s.memUnfocused || "low";
-            $("memMinimized").value = s.memMinimized || "low";
             pttCode = s.pushToTalkCode || "";
             updateZoomLabel();
             applyLanguage();
@@ -506,9 +433,6 @@
                 screenShareBitrateKbps: Number($("screenShareBitrateKbps").value) || 6000,
                 autoQualityAdjust: $("autoQualityAdjust").checked,
                 screenShareEncoder: $("screenShareEncoder").value,
-                memFocused: $("memFocused").value,
-                memUnfocused: $("memUnfocused").value,
-                memMinimized: $("memMinimized").value
             };
         }
 
@@ -537,31 +461,7 @@
             save();
         });
 
-        $("memFocused").addEventListener("change", save);
-        $("memUnfocused").addEventListener("change", save);
-        $("memMinimized").addEventListener("change", save);
-        $("openCustom").addEventListener("click", () => {
-            $("cmName").value = settings.customMemoryName || "Custom";
-            $("cmLevel").value = settings.customMemoryLevel || "low";
-            $("cmTrim").checked = !!settings.customMemoryTrim;
-            $("cmDelay").value = settings.customMemoryTrimDelay || 60;
-            $("customModal").style.display = "flex";
-        });
-        $("cmCancel").addEventListener("click", () => { $("customModal").style.display = "none"; });
-        $("cmSave").addEventListener("click", async () => {
-            settings.customMemoryName = ($("cmName").value || "Custom").slice(0, 24);
-            settings.customMemoryLevel = $("cmLevel").value;
-            settings.customMemoryTrim = $("cmTrim").checked;
-            settings.customMemoryTrimDelay = Math.max(5, Number($("cmDelay").value) || 60);
-            try {
-                await invoke("save_settings", { settings });
-                $("customModal").style.display = "none";
-                render(settings);
-                $("cmStatus").textContent = "";
-            } catch (e) {
-                $("cmStatus").textContent = "保存に失敗: " + e;
-            }
-        });
+        
         $("screenShare").addEventListener("change", save);
         $("screenShareMode").addEventListener("change", save);
         $("screenShareCodec").addEventListener("change", save);
