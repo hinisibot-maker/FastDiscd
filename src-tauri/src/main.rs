@@ -1850,14 +1850,18 @@ const SHARE_JS: &str = r##"
         var ctx = canvas.getContext("2d");
         var listening = false;
 
+        var listenerReady = null;
         function ensure() {
-            if (listening) return Promise.resolve();
-            listening = true;
-            return tauri.event.listen("fastdisc://frame", function (event) {
-                var img = new Image();
-                img.onload = function () { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
-                img.src = "data:image/jpeg;base64," + event.payload;
-            }).then(function () { return invoke("capture_start"); });
+            if (!listenerReady) {
+                listening = true;
+                listenerReady = tauri.event.listen("fastdisc://frame", function (event) {
+                    var img = new Image();
+                    img.onload = function () { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
+                    img.src = "data:image/jpeg;base64," + event.payload;
+                });
+            }
+            // 何回目の共有でも必ずキャプチャを（再）開始する
+            return Promise.resolve(listenerReady).then(function () { return invoke("capture_start"); });
         }
 
         var proto = Object.getPrototypeOf(navigator.mediaDevices);
