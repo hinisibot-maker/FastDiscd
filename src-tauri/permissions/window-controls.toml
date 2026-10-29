@@ -43,4 +43,8 @@ commands.allow = [
     "capture_start",
     "capture_stop",
     "js_guard_error",
+    "list_sources",
+    "show_source_picker",
+    "select_source",
+    "selection_state",
 ]

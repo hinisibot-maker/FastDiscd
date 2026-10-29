@@ -79,6 +79,7 @@ impl Default for Config {
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 static LAST_PATH: OnceLock<Mutex<String>> = OnceLock::new();
 static DISCORD_LOCALE: OnceLock<Mutex<String>> = OnceLock::new();
+static SELECTED_SOURCE: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sync::Mutex::new(None);
 static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -96,6 +97,10 @@ fn main() {
             clear_cache_now,
             close_settings,
             open_settings_window,
+            list_sources,
+            show_source_picker,
+            select_source,
+            selection_state,
 
 
             get_autostart,
@@ -161,6 +166,10 @@ fn main() {
 
             if std::env::var_os("RUSTCORD_OPEN_SETTINGS").is_some() {
                 open_settings(app.handle());
+            }
+
+            if std::env::var_os("RUSTCORD_OPEN_PICKER").is_some() {
+                show_source_picker(app.handle().clone());
             }
 
             if std::env::var_os("RUSTCORD_SELFTEST").is_some() {
@@ -773,6 +782,84 @@ fn send_memory_pressure(window: &WebviewWindow, level: &str) {
         simulate_memory_pressure(&core, &level.to_string());
     });
 }
+
+#[derive(Clone, serde::Serialize)]
+struct CaptureSource {
+    id: String,
+    name: String,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+#[tauri::command]
+fn list_sources() -> Vec<CaptureSource> {
+    let mut out = Vec::new();
+    unsafe {
+        let mut monitors: Vec<HMONITOR> = Vec::new();
+        let _ = EnumDisplayMonitors(None::<HDC>, None::<*const RECT>, Some(enum_monitor_proc), LPARAM(&mut monitors as *mut _ as isize));
+        for (i, mon) in monitors.iter().enumerate() {
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            if GetMonitorInfoW(*mon, &mut info).as_bool() {
+                let r = info.rcMonitor;
+                out.push(CaptureSource {
+                    id: format!("monitor:{i}"),
+                    name: format!("画面 {}", i + 1),
+                    x: r.left,
+                    y: r.top,
+                    width: r.right - r.left,
+                    height: r.bottom - r.top,
+                });
+            }
+        }
+    }
+    out
+}
+
+unsafe extern "system" fn enum_monitor_proc(
+    monitor: HMONITOR,
+    _hdc: HDC,
+    _rect: *mut RECT,
+    data: LPARAM,
+) -> windows::core::BOOL {
+    let monitors = &mut *(data.0 as *mut Vec<HMONITOR>);
+    monitors.push(monitor);
+    windows::core::BOOL(1)
+}
+
+#[tauri::command]
+fn show_source_picker(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("picker") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(&app, "picker", WebviewUrl::App("picker.html".into()))
+        .title("配信する画面を選択")
+        .inner_size(440.0, 460.0)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .background_color(tauri::utils::config::Color(30, 31, 34, 255))
+        .center()
+        .build();
+}
+
+#[tauri::command]
+fn selection_state() -> bool {
+    SELECTED_SOURCE.lock().map(|s| s.is_some()).unwrap_or(false)
+}
+
+#[tauri::command]
+fn select_source(app: AppHandle, id: String, x: i32, y: i32, width: i32, height: i32) {
+    *SELECTED_SOURCE.lock().unwrap() = Some((x, y, width, height));
+    log(&format!("capture source selected: {id}"));
+    if let Some(window) = app.get_webview_window("picker") {
+        let _ = window.close();
+    }
+    let _ = app.emit("fastdisc://source-selected", ());
+}
 /// Discord の表示言語を取得して保持する（「Discordに合わせる」用）。
 fn poll_locale(window: &WebviewWindow) {
     let _ = window.with_webview(|webview| {
@@ -1160,7 +1247,14 @@ fn grab_screen_jpeg(out_w: i32, out_h: i32) -> Option<Vec<u8>> {
         let bitmap = CreateCompatibleBitmap(screen, out_w, out_h);
         let old = SelectObject(mem, bitmap.into());
         let _ = SetStretchBltMode(mem, HALFTONE);
-        let ok = StretchBlt(mem, 0, 0, out_w, out_h, Some(screen), 0, 0, width, height, SRCCOPY).as_bool();
+        let (sx, sy, sw, sh) = {
+            let sel = SELECTED_SOURCE.lock().unwrap();
+            match *sel {
+                Some((x, y, w, h)) => (x, y, w, h),
+                None => (0, 0, width, height),
+            }
+        };
+        let ok = StretchBlt(mem, 0, 0, out_w, out_h, Some(screen), sx, sy, sw, sh, SRCCOPY).as_bool();
 
         let mut pixels = vec![0u8; (out_w * out_h * 4) as usize];
         let mut info = BITMAPINFO::default();
@@ -1259,6 +1353,8 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA};
+use windows::Win32::Foundation::{LPARAM, RECT};
+use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, IsIconic, IsZoomed, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
 };
@@ -1486,8 +1582,22 @@ const SHARE_JS: &str = r##"
             Object.defineProperty(proto, "getDisplayMedia", {
                 configurable: true,
                 value: function () {
-                    return ensure().then(function () {
-                        var stream = canvas.captureStream(30);
+                    return invoke("list_sources").then(function (sources) {
+                        if (!sources || sources.length <= 1) return;
+                        return new Promise(function (resolve) {
+                            invoke("show_source_picker");
+                            var tries = 0;
+                            var timer = setInterval(function () {
+                                tries++;
+                                invoke("selection_state").then(function (ok) {
+                                    if (ok || tries > 300) { clearInterval(timer); resolve(); }
+                                }).catch(function () { clearInterval(timer); resolve(); });
+                            }, 400);
+                        });
+                    }).then(function () {
+                        return ensure();
+                    }).then(function () {
+                    var stream = canvas.captureStream(30);
                         var track = stream.getVideoTracks()[0];
                         if (track) {
                             try { track.contentHint = "detail"; } catch (e) { }

@@ -4,11 +4,13 @@
     "description": "RustCord のメインウィンドウ用ケイパビリティ",
     "windows": [
         "main",
-        "settings"
+        "settings",
+        "picker"
     ],
     "permissions": [
         "core:default",
-        "allow-settings-access"
+        "allow-settings-access",
+        "allow-screen-share"
     ]
 }
 

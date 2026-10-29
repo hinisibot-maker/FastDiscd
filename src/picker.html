@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8" />
+    <title>配信する画面を選択</title>
+    <style>
+        :root { color-scheme: dark; }
+        body {
+            margin: 0; padding: 18px; background: #1e1f22; color: #dbdee1;
+            font-family: "Yu Gothic UI", "Segoe UI", sans-serif; font-size: 14px; user-select: none;
+        }
+        h1 { font-size: 16px; margin: 0 0 12px; }
+        .item {
+            display: flex; align-items: center; gap: 10px; width: 100%;
+            background: #2b2d31; border: 1px solid #3f4147; border-radius: 10px;
+            padding: 12px 14px; margin-bottom: 8px; cursor: pointer; color: #dbdee1; text-align: left;
+        }
+        .item:hover { background: #35373c; border-color: #5865f2; }
+        .name { font-weight: 600; }
+        .meta { color: #949ba4; font-size: 12px; margin-top: 2px; }
+        .empty { color: #949ba4; }
+    </style>
+</head>
+
+<body>
+    <h1>配信する画面を選択</h1>
+    <div id="list"><div class="empty">読み込み中...</div></div>
+
+    <script>
+        const tauriApi = window.__TAURI__ || {};
+        const invoke = (tauriApi.core && tauriApi.core.invoke) || (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+
+        function render(items) {
+            const list = document.getElementById("list");
+            if (!items || items.length === 0) {
+                list.innerHTML = '<div class="empty">画面が見つかりません</div>';
+                return;
+            }
+            list.innerHTML = "";
+            for (const s of items) {
+                const btn = document.createElement("button");
+                btn.className = "item";
+                btn.innerHTML = '<div><div class="name"></div><div class="meta"></div></div>';
+                btn.querySelector(".name").textContent = s.name;
+                btn.querySelector(".meta").textContent = s.width + " × " + s.height;
+                btn.addEventListener("click", () => {
+                    invoke("select_source", { id: s.id, x: s.x, y: s.y, width: s.width, height: s.height });
+                });
+                list.appendChild(btn);
+            }
+        }
+
+        invoke("list_sources").then(render).catch((e) => {
+            document.getElementById("list").textContent = "読み込みに失敗: " + e;
+        });
+    </script>
+</body>
+
+</html>
