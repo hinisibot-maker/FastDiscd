@@ -3043,15 +3043,26 @@ const SHARE_JS: &str = r##"
             }
         }
 
+        function toArrayBuffer(value) {
+            if (value instanceof ArrayBuffer) return value;
+            if (ArrayBuffer.isView(value)) {
+                return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+            }
+            if (Array.isArray(value)) return new Uint8Array(value).buffer;
+            return null;
+        }
+
         function handleBinaryFrame(buf) {
             try {
-                var dv = new DataView(buf);
+                var ab = toArrayBuffer(buf);
+                if (!ab) return;
+                var dv = new DataView(ab);
                 if (dv.byteLength < 16 || dv.getUint32(0, true) !== 0x31464446) return;
                 var codec = dv.getUint8(4);
                 var key = (dv.getUint8(5) & 1) === 1;
                 var width = dv.getUint16(6, true);
                 var height = dv.getUint16(8, true);
-                var payload = new Uint8Array(buf, 16);
+                var payload = new Uint8Array(ab, 16);
                 if (codec === 0) {
                     feedH264(payload, key, width, height);
                 } else {
