@@ -457,6 +457,311 @@ fn friendly_name(activate: &IMFActivate) -> String {
 }
 
 /// BGRA → NV12（BT.709 limited range, 2x2 平均でクロマ生成）
+
+// ---------------------------------------------------------------------------
+// FFmpeg 経由のハードウェアエンコード（NVENC / QSV / AMF）
+// ---------------------------------------------------------------------------
+
+pub struct FfmpegEncoder {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    width: i32,
+    height: i32,
+    pub name: String,
+}
+
+fn find_start_code(buf: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while i + 3 <= buf.len() {
+        if buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 1 {
+            return Some(i);
+        }
+        if i + 4 <= buf.len() && buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 0 && buf[i + 3] == 1 {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn split_annexb(buf: &mut Vec<u8>, out: &mut Vec<Vec<u8>>) {
+    loop {
+        let Some(start) = find_start_code(buf, 0) else {
+            return;
+        };
+        if start > 0 {
+            buf.drain(..start);
+        }
+        match find_start_code(buf, 4) {
+            Some(next) => {
+                out.push(buf.drain(..next).collect());
+            }
+            None => return,
+        }
+    }
+}
+
+pub fn find_ffmpeg() -> Option<std::path::PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let local = dir.join("ffmpeg.exe");
+            if local.exists() {
+                return Some(local);
+            }
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("ffmpeg.exe");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    // winget / 一般的なインストール先も探す
+    let mut roots = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(std::path::PathBuf::from(local).join("Microsoft/WinGet/Packages"));
+    }
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        roots.push(std::path::PathBuf::from(pf));
+    }
+    for root in roots {
+        if let Some(found) = find_ffmpeg_recursive(&root, 4) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_ffmpeg_recursive(dir: &std::path::Path, depth: u32) -> Option<std::path::PathBuf> {
+    if depth == 0 {
+        return None;
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_ffmpeg_recursive(&path, depth - 1) {
+                return Some(found);
+            }
+        } else if path.file_name().and_then(|n| n.to_str()).map(|n| n.eq_ignore_ascii_case("ffmpeg.exe")).unwrap_or(false) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn available_encoders(ffmpeg: &std::path::Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut cmd = std::process::Command::new(ffmpeg);
+    cmd.args(["-hide_banner", "-encoders"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if let Ok(output) = cmd.output() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for name in ["h264_nvenc", "h264_qsv", "h264_amf", "libx264"] {
+            if text.contains(name) {
+                found.push(name.to_string());
+            }
+        }
+    }
+    found
+}
+
+impl FfmpegEncoder {
+    pub fn create(width: i32, height: i32, fps: u32, bitrate_kbps: u32) -> Option<Self> {
+        let ffmpeg = find_ffmpeg()?;
+        let width = (width.max(16) + 1) & !1;
+        let height = (height.max(16) + 1) & !1;
+        for encoder in available_encoders(&ffmpeg) {
+            let mut cmd = std::process::Command::new(&ffmpeg);
+            cmd.args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "nv12",
+                "-s",
+                &format!("{width}x{height}"),
+                "-r",
+                &fps.to_string(),
+                "-i",
+                "-",
+                "-c:v",
+                &encoder,
+            ]);
+            match encoder.as_str() {
+                "h264_nvenc" => {
+                    cmd.args(["-preset", "p1", "-tune", "ll", "-rc", "cbr", "-bf", "0"]);
+                }
+                "h264_qsv" => {
+                    cmd.args(["-preset", "veryfast", "-bf", "0"]);
+                }
+                "h264_amf" => {
+                    cmd.args(["-quality", "speed", "-rc", "cbr", "-bf", "0"]);
+                }
+                _ => {
+                    cmd.args(["-preset", "veryfast", "-tune", "zerolatency"]);
+                }
+            }
+            cmd.args([
+                "-b:v",
+                &format!("{bitrate_kbps}k"),
+                "-maxrate",
+                &format!("{bitrate_kbps}k"),
+                "-bufsize",
+                &format!("{}k", bitrate_kbps * 2),
+                "-g",
+                &(fps * 2).to_string(),
+                "-f",
+                "h264",
+                "-flush_packets",
+                "1",
+                "pipe:1",
+            ]);
+            cmd.stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                cmd.creation_flags(CREATE_NO_WINDOW);
+            }
+            let Ok(mut child) = cmd.spawn() else {
+                continue;
+            };
+            let Some(stdin) = child.stdin.take() else {
+                continue;
+            };
+            let Some(mut stdout) = child.stdout.take() else {
+                let _ = child.kill();
+                continue;
+            };
+            let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut buf: Vec<u8> = Vec::new();
+                let mut out: Vec<Vec<u8>> = Vec::new();
+                let mut chunk = [0u8; 64 * 1024];
+                loop {
+                    match stdout.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            out.clear();
+                            split_annexb(&mut buf, &mut out);
+                            for nal in out.drain(..) {
+                                if tx.send(nal).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            crate::log(&format!("ffmpeg encoder selected: {encoder}"));
+            return Some(Self {
+                child,
+                stdin,
+                rx,
+                width,
+                height,
+                name: encoder,
+            });
+        }
+        None
+    }
+
+    pub fn width(&self) -> i32 {
+        self.width
+    }
+
+    pub fn height(&self) -> i32 {
+        self.height
+    }
+
+    pub fn encode(&mut self, nv12: &[u8]) -> Vec<Vec<u8>> {
+        use std::io::Write;
+        if self.stdin.write_all(nv12).is_err() {
+            return Vec::new();
+        }
+        let _ = self.stdin.flush();
+        let mut out = Vec::new();
+        while let Ok(nal) = self.rx.try_recv() {
+            out.push(nal);
+        }
+        out
+    }
+
+    pub fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+impl Drop for FfmpegEncoder {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// MF と FFmpeg をまとめたエンコーダ
+pub enum ActiveEncoder {
+    Mf(H264Encoder),
+    Ffmpeg(FfmpegEncoder),
+}
+
+impl ActiveEncoder {
+    pub fn width(&self) -> i32 {
+        match self {
+            Self::Mf(e) => e.width(),
+            Self::Ffmpeg(e) => e.width(),
+        }
+    }
+
+    pub fn height(&self) -> i32 {
+        match self {
+            Self::Mf(e) => e.height(),
+            Self::Ffmpeg(e) => e.height(),
+        }
+    }
+
+    pub fn reconfigure(&mut self, width: i32, height: i32, bitrate_kbps: u32) -> bool {
+        match self {
+            Self::Mf(e) => e.reconfigure(width, height, bitrate_kbps),
+            Self::Ffmpeg(_) => false,
+        }
+    }
+
+    pub fn request_keyframe(&self) {
+        if let Self::Mf(e) = self {
+            e.request_keyframe();
+        }
+    }
+
+    pub fn encode(&mut self, nv12: &[u8], force_key: bool) -> Vec<Vec<u8>> {
+        match self {
+            Self::Mf(e) => e.encode(nv12, force_key),
+            Self::Ffmpeg(e) => e.encode(nv12),
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Mf(e) => format!("{} (mediafoundation hw={})", e.info.name, e.info.hardware),
+            Self::Ffmpeg(e) => format!("ffmpeg {}", e.name),
+        }
+    }
+}
 pub fn bgra_to_nv12(src: &[u8], width: usize, height: usize) -> Vec<u8> {
     let w = width & !1;
     let h = height & !1;

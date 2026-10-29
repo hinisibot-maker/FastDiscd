@@ -93,7 +93,7 @@ static DISCORD_LOCALE: OnceLock<Mutex<String>> = OnceLock::new();
 static SELECTED_SOURCE: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sync::Mutex::new(None);
 static MAIN_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static ENCODER: std::sync::Mutex<Option<encoder::H264Encoder>> = std::sync::Mutex::new(None);
+static ENCODER: std::sync::Mutex<Option<encoder::ActiveEncoder>> = std::sync::Mutex::new(None);
 static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -765,7 +765,8 @@ fn supervisor(window: WebviewWindow) {
         let want_suspend = false;
         let want_low = minimized || !focused;
 
-        if want_low {
+        let sharing = CAPTURING.load(std::sync::atomic::Ordering::SeqCst);
+        if want_low && !sharing {
             if last_pressure.elapsed() > Duration::from_secs(5) {
                 send_memory_pressure(&window, "critical");
                 last_pressure = std::time::Instant::now();
@@ -1458,6 +1459,14 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
             let Ok(img) = image::load_from_memory(&png) else {
                 continue;
             };
+            // 配信負荷を抑えるため最大960pxへ縮小する
+            let img = if img.width() > 960 {
+                let ratio = 960.0 / img.width() as f32;
+                let nh = ((img.height() as f32) * ratio) as u32;
+                img.resize_exact(960, nh.max(16), image::imageops::FilterType::Triangle)
+            } else {
+                img
+            };
             let rgba = img.to_rgba8();
             let width = rgba.width() as i32;
             let height = rgba.height() as i32;
@@ -1469,13 +1478,24 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
 
             let mut guard = ENCODER.lock().unwrap();
             if guard.is_none() {
-                if let Some(enc) = encoder::H264Encoder::create(
+                let created = encoder::FfmpegEncoder::create(
                     width,
                     height,
-                    cfg.screen_share_max_fps.clamp(5, 10),
+                    cfg.screen_share_max_fps.clamp(5, 5),
                     cfg.screen_share_bitrate_kbps.max(500),
-                ) {
-                    log(&format!("self h264 encoder: {} (hw={})", enc.info.name, enc.info.hardware));
+                )
+                .map(encoder::ActiveEncoder::Ffmpeg)
+                .or_else(|| {
+                    encoder::H264Encoder::create(
+                        width,
+                        height,
+                        cfg.screen_share_max_fps.clamp(5, 5),
+                        cfg.screen_share_bitrate_kbps.max(500),
+                    )
+                    .map(encoder::ActiveEncoder::Mf)
+                });
+                if let Some(enc) = created {
+                    log(&format!("self h264 encoder: {}", enc.describe()));
                     *guard = Some(enc);
                 }
             }
@@ -1518,7 +1538,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                 }
             }
 
-            let fps = cfg.screen_share_max_fps.clamp(5, 10) as u64;
+            let fps = cfg.screen_share_max_fps.clamp(5, 5) as u64;
             let target = Duration::from_millis(1000 / fps);
             let elapsed = started.elapsed();
             if elapsed < target {
@@ -1676,17 +1696,15 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             let started = std::time::Instant::now();
             let mut guard = ENCODER.lock().unwrap();
             if guard.is_none() {
-                match encoder::H264Encoder::create(
-                    width,
-                    height,
-                    self.fps,
-                    self.bitrate,
-                ) {
+                let created = encoder::FfmpegEncoder::create(width, height, self.fps, self.bitrate)
+                    .map(encoder::ActiveEncoder::Ffmpeg)
+                    .or_else(|| {
+                        encoder::H264Encoder::create(width, height, self.fps, self.bitrate)
+                            .map(encoder::ActiveEncoder::Mf)
+                    });
+                match created {
                     Some(enc) => {
-                        log(&format!(
-                            "h264 encoder: {} (hw={})",
-                            enc.info.name, enc.info.hardware
-                        ));
+                        log(&format!("h264 encoder: {}", enc.describe()));
                         *guard = Some(enc);
                     }
                     None => log("h264 encoder unavailable, falling back to JPEG"),

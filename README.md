@@ -167,6 +167,22 @@ pnpm tauri build
 FastDiscd is still in beta and I'm looking for people to help test it.
 If you try it, please report issues (crash, memory, PTT, drag & drop, installer) via GitHub Issues.
 Especially useful: reports on memory usage with many channels open, and on different GPUs (NVIDIA / Intel / AMD).
+
+### Hardware encoding (optional, recommended)
+
+Screen sharing encodes with H.264 and can use your GPU's video encoder:
+
+- **NVIDIA (NVENC) / Intel (Quick Sync) / AMD (AMF)** — used automatically when `ffmpeg.exe` is available
+- **Media Foundation H.264** — built-in fallback (software on most systems)
+- **JPEG** — legacy fallback (`Settings → Stream codec → JPEG`)
+
+To enable GPU encoding, install FFmpeg once (FastDiscd finds it automatically):
+
+```powershell
+winget install Gyan.FFmpeg
+```
+
+You can also drop `ffmpeg.exe` next to `fastdiscd.exe`.
 ## Known limitations
 
 - Screen sharing is experimental and may not work depending on Discord's client-side detection
