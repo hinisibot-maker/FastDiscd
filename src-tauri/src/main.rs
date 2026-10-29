@@ -80,6 +80,7 @@ static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 static LAST_PATH: OnceLock<Mutex<String>> = OnceLock::new();
 static DISCORD_LOCALE: OnceLock<Mutex<String>> = OnceLock::new();
 static SELECTED_SOURCE: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sync::Mutex::new(None);
+static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CAPTURING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1293,16 +1294,21 @@ fn ptt_loop(window: WebviewWindow) {
 
 #[tauri::command]
 fn capture_start(app: AppHandle) -> bool {
-    if CAPTURING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return true;
+    // 既存セッション（WGC / GDI）を必ず停止してから、選択中のソースで開始し直す
+    CAPTURE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
+        let _ = control.stop();
+        log("previous capture stopped for restart");
     }
+    let gen = CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst);
     let monitor = *SELECTED_MONITOR.lock().unwrap();
     if let Some(index) = monitor {
         if start_wgc_capture(app.clone(), index) {
             return true;
         }
     }
-    std::thread::spawn(move || capture_loop(app));
+    std::thread::spawn(move || capture_loop(app, gen));
     true
 }
 
@@ -1420,13 +1426,15 @@ fn start_wgc_capture(app: AppHandle, monitor_index: usize) -> bool {
         }
     }
 }
-fn capture_loop(app: AppHandle) {
+fn capture_loop(app: AppHandle, gen: u64) {
     let mut width = 1024i32;
     let mut height = 576i32;
     let mut delay = 50u64; // ~20fps target when GPU is free
     let mut last_gpu_check = std::time::Instant::now() - Duration::from_secs(30);
 
-    while CAPTURING.load(std::sync::atomic::Ordering::SeqCst) {
+    while CAPTURING.load(std::sync::atomic::Ordering::SeqCst)
+        && CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst) == gen
+    {
         // GPU（ビデオエンコーダー）負荷が高いときは配信を弱めてゲームを優先
         if last_gpu_check.elapsed() > Duration::from_secs(10) {
             last_gpu_check = std::time::Instant::now();
