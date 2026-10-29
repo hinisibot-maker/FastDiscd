@@ -175,7 +175,7 @@ fn main() {
                 let app_handle = app.handle().clone();
                 let builder = WebviewWindowBuilder::new(&app_handle, "picker", WebviewUrl::App("picker.html".into()))
                     .title("配信する画面を選択")
-                    .inner_size(720.0, 620.0)
+                    .inner_size(960.0, 720.0)
                     .resizable(true)
                     .maximizable(false)
                     .minimizable(false)
@@ -952,7 +952,7 @@ fn list_sources() -> Vec<CaptureSource> {
                     y: r.top,
                     width: w,
                     height: h,
-                    thumb: screen_thumb(r.left, r.top, w, h, 160, 90),
+                    thumb: screen_thumb(r.left, r.top, w, h, 320, 180),
                 });
             }
         }
@@ -971,7 +971,7 @@ fn list_sources() -> Vec<CaptureSource> {
                 y: rect.top,
                 width: w,
                 height: h,
-                thumb: window_thumb(hwnd, w, h, 160, 90),
+                thumb: window_thumb(hwnd, w, h, 320, 180),
             });
         }
     }
@@ -1434,6 +1434,8 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
 
     fn on_closed(&mut self) -> Result<(), Self::Error> {
         CAPTURING.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.app.emit("fastdisc://capture-ended", ());
+        log("capture ended (source closed)");
         Ok(())
     }
 }
@@ -2004,6 +2006,10 @@ const SHARE_JS: &str = r##"
                         if (track) {
                             try { track.contentHint = "detail"; } catch (e) { }
                             track.addEventListener("ended", function () { invoke("capture_stop"); });
+                            tauri.event.listen("fastdisc://capture-ended", function () {
+                                try { track.stop(); } catch (e) { }
+                                invoke("capture_stop");
+                            });
                         }
                         return stream;
                     });
