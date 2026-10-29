@@ -1309,6 +1309,10 @@ fn capture_start(app: AppHandle) -> bool {
 #[tauri::command]
 fn capture_stop() {
     CAPTURING.store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
+        let _ = control.stop();
+        log("wgc session stopped");
+    }
 }
 
 #[tauri::command]
@@ -1325,6 +1329,10 @@ fn disable_screen_share() {
     log("screen share auto-disabled");
 }
 
+
+type WgcError = Box<dyn std::error::Error + Send + Sync>;
+static WGC_CONTROL: std::sync::Mutex<Option<windows_capture::capture::CaptureControl<WgcHandler, WgcError>>> =
+    std::sync::Mutex::new(None);
 
 struct WgcHandler {
     app: AppHandle,
@@ -1396,12 +1404,21 @@ fn start_wgc_capture(app: AppHandle, monitor_index: usize) -> bool {
         ColorFormat::Rgba8,
         app,
     );
-    std::thread::spawn(move || match WgcHandler::start_free_threaded(settings) {
-        Ok(_) => log("wgc thread finished"),
-        Err(e) => log(&format!("wgc error: {e}")),
-    });
-    log("wgc capture started");
-    true
+    if let Some(control) = WGC_CONTROL.lock().unwrap().take() {
+        let _ = control.stop();
+        log("wgc previous session stopped");
+    }
+    match WgcHandler::start_free_threaded(settings) {
+        Ok(control) => {
+            *WGC_CONTROL.lock().unwrap() = Some(control);
+            log("wgc capture started");
+            true
+        }
+        Err(e) => {
+            log(&format!("wgc error: {e}"));
+            false
+        }
+    }
 }
 fn capture_loop(app: AppHandle) {
     let mut width = 1024i32;
