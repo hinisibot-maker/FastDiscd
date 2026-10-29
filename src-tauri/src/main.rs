@@ -51,6 +51,8 @@ struct Config {
     screen_share: bool,
     /// 画面共有の方式: "rust" (独自キャプチャ) / "browser" (Discord/ブラウザ標準)
     screen_share_mode: String,
+    /// チャンネル切替時にページを再読み込みしてメモリを解放する
+    reload_on_channel_switch: bool,
 }
 
 impl Default for Config {
@@ -69,6 +71,7 @@ impl Default for Config {
             language: "auto".to_string(),
             screen_share: false,
             screen_share_mode: "rust".to_string(),
+            reload_on_channel_switch: false,
         }
     }
 }
@@ -831,6 +834,9 @@ fn poll_route(window: &WebviewWindow) {
                 log(&format!("route changed: {} -> {path}", *last));
                 clear_http_cache(&core_for_handler);
                 collect_garbage(&core_for_handler);
+                if config().reload_on_channel_switch {
+                    unsafe { let _ = core_for_handler.Reload(); }
+                }
             }
 
             *last = path;

@@ -149,6 +149,13 @@
             </div>
             <input type="checkbox" id="clearCacheOnChannelChange" />
         </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="reloadChannel.label"></span>
+                <div class="hint" data-i18n="reloadChannel.hint"></div>
+            </div>
+            <input type="checkbox" id="reloadOnChannelSwitch" />
+        </div>
     </div>
 
     <div class="group">
@@ -263,6 +270,8 @@
                 "cacheNav.hint": "Drops the HTTP cache whenever a page loads.",
                 "cacheChannel.label": "Clear previous page cache on channel switch",
                 "cacheChannel.hint": "Discards the old channel's images/GIF cache when switching channels.",
+                "reloadChannel.label": "Reload page on channel switch",
+                "reloadChannel.hint": "Frees all channel memory, but switching takes a few seconds.",
                 "minimizeMem.label": "Free memory when minimized",
                 "minimizeMem.hint": "Puts WebView2 into a low-memory state while minimized (notifications keep working).",
                 "lowMem.label": "Low memory target when unfocused",
@@ -312,6 +321,8 @@
                 "cacheNav.hint": "ページ遷移時に HTTP キャッシュを破棄します。",
                 "cacheChannel.label": "チャンネル切替時に前ページのキャッシュを削除",
                 "cacheChannel.hint": "チャンネル切替時に旧ページの画像・GIFキャッシュを破棄します。",
+                "reloadChannel.label": "チャンネル切替時に再読み込み",
+                "reloadChannel.hint": "全チャンネルのメモリを解放しますが、切替に数秒かかります。",
                 "minimizeMem.label": "最小化時にメモリを解放",
                 "minimizeMem.hint": "最小化中は WebView2 を省メモリ状態にします（通知は止まりません）。",
                 "lowMem.label": "非フォーカス時にメモリ目標を Low にする",
@@ -353,7 +364,7 @@
             }
         };
 
-        const fields = ["clearCacheOnNavigation", "clearCacheOnChannelChange", "startMinimized", "minimizeToTray", "hardwareAcceleration"];
+        const fields = ["clearCacheOnNavigation", "clearCacheOnChannelChange", "reloadOnChannelSwitch", "startMinimized", "minimizeToTray", "hardwareAcceleration"];
         const $ = id => document.getElementById(id);
 
         let settings = null;
@@ -412,6 +423,7 @@
             return {
                 clearCacheOnNavigation: $("clearCacheOnNavigation").checked,
                 clearCacheOnChannelChange: $("clearCacheOnChannelChange").checked,
+                reloadOnChannelSwitch: $("reloadOnChannelSwitch").checked,
                 suspendOnMinimize: $("suspendOnMinimize").checked,
                 lowMemoryOnBlur: $("lowMemoryOnBlur").checked,
                 startMinimized: $("startMinimized").checked,
