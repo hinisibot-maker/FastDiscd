@@ -701,6 +701,7 @@ fn supervisor(window: WebviewWindow) {
     let mut last_apply = std::time::Instant::now();
     let mut low_since: Option<std::time::Instant> = None;
     let mut last_trim = std::time::Instant::now() - Duration::from_secs(3600);
+    let mut last_pressure = std::time::Instant::now() - Duration::from_secs(3600);
 
     loop {
         std::thread::sleep(Duration::from_millis(1200));
@@ -729,6 +730,10 @@ fn supervisor(window: WebviewWindow) {
 
         if want_low {
             if low_since.is_none() { low_since = Some(std::time::Instant::now()); }
+            if last_pressure.elapsed() > Duration::from_secs(30) {
+                send_memory_pressure(&window, "moderate");
+                last_pressure = std::time::Instant::now();
+            }
             if cfg.custom_memory_trim && cfg.custom_memory_trim_delay > 0 {
                 if let Some(start) = low_since {
                     if start.elapsed() > Duration::from_secs(cfg.custom_memory_trim_delay as u64)
@@ -796,6 +801,18 @@ fn maybe_run_command(window: &WebviewWindow) {
     });
 }
 
+
+/// Chromium に定期的なメモリ逼迫を通知してキャッシュを手放させる（挙動は穏やか）
+fn send_memory_pressure(window: &WebviewWindow, level: &str) {
+    let level = HSTRING::from(level);
+    let _ = window.with_webview(move |webview| {
+        let controller = webview.controller();
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else {
+            return;
+        };
+        simulate_memory_pressure(&core, &level.to_string());
+    });
+}
 /// Discord の表示言語を取得して保持する（「Discordに合わせる」用）。
 fn poll_locale(window: &WebviewWindow) {
     let _ = window.with_webview(|webview| {
