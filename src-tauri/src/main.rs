@@ -102,6 +102,9 @@ static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 static SETTINGS_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        log(&format!("PANIC: {info}"));
+    }));
     migrate_legacy_data();
     init_config();
     configure_webview2();
@@ -2105,6 +2108,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             let started = std::time::Instant::now();
             let mut guard = ENCODER.lock().unwrap();
             if guard.is_none() {
+                log(&format!("h264 create begin {width}x{height}"));
                 let created = encoder::FfmpegEncoder::create(width, height, self.fps, self.bitrate)
                     .map(encoder::ActiveEncoder::Ffmpeg)
                     .or_else(|| {
@@ -2113,7 +2117,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                     });
                 match created {
                     Some(enc) => {
-                        log(&format!("h264 encoder: {}", enc.describe()));
+                        log(&format!("h264 encoder: {} (created)", enc.describe()));
                         // 新しいエンコーダでは SPS/PPS から送り直す
                         self.gate.reset();
                         self.first = true;
@@ -2133,6 +2137,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                     self.gate.reset();
                     self.first = true;
                     self.last_emit = std::time::Instant::now() - Duration::from_secs(1);
+                    log("h264 gate reset for resize");
                     if enc.reconfigure(width, height, self.bitrate) {
                         // 解像度変更後は IDR を強制してデコーダに新しい SPS を届ける
                         enc.request_keyframe();
@@ -2235,7 +2240,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             }
         }
 
-        let rgb: Vec<u8> = data.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let rgb: Vec<u8> = pixels.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
         let mut out = Vec::new();
         let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 70);
         enc.encode(&rgb, width as u32, height as u32, image::ExtendedColorType::Rgb8)?;
