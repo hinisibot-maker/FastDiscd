@@ -962,24 +962,31 @@ fn show_source_picker(app: AppHandle) {
         let _ = window.set_focus();
         return;
     }
-    let built = WebviewWindowBuilder::new(&app, "picker", WebviewUrl::App("picker.html".into()))
-        .title("配信する画面を選択")
-        .inner_size(720.0, 620.0)
-        .resizable(true)
-        .maximizable(false)
-        .minimizable(false)
-        .background_color(tauri::utils::config::Color(30, 31, 34, 255))
-        .center()
-        .build();
-    match built {
-        Ok(window) => {
-            let _ = window.show();
-            let _ = window.set_focus();
-            let _ = window.set_always_on_top(true);
-            log("picker window created");
+    // ウィンドウ生成はメインスレッドで行う（IPCスレッドから直接buildすると固まる）
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if handle.get_webview_window("picker").is_some() {
+            return;
         }
-        Err(e) => log(&format!("picker window error: {e}")),
-    }
+        let built = WebviewWindowBuilder::new(&handle, "picker", WebviewUrl::App("picker.html".into()))
+            .title("配信する画面を選択")
+            .inner_size(720.0, 620.0)
+            .resizable(true)
+            .maximizable(false)
+            .minimizable(false)
+            .background_color(tauri::utils::config::Color(30, 31, 34, 255))
+            .center()
+            .build();
+        match built {
+            Ok(window) => {
+                let _ = window.show();
+                let _ = window.set_focus();
+                let _ = window.set_always_on_top(true);
+                log("picker window created");
+            }
+            Err(e) => log(&format!("picker window error: {e}")),
+        }
+    });
 }
 
 #[tauri::command]
@@ -988,7 +995,6 @@ fn close_picker(app: AppHandle) {
         let _ = window.close();
     }
 }
-
 #[tauri::command]
 fn selection_state() -> bool {
     SELECTED_SOURCE.lock().map(|s| s.is_some()).unwrap_or(false)
