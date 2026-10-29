@@ -49,26 +49,6 @@ struct Config {
     language: String,
     /// 画面共有（実験的）
     screen_share: bool,
-    /// フォーカス時のメモリ目標 ("normal" | "low")
-    mem_focused: String,
-    /// 非フォーカス時のメモリ目標
-    mem_unfocused: String,
-    /// 最小化時のメモリ目標
-    mem_minimized: String,
-    /// カスタムメモリ設定の名前
-    custom_memory_name: String,
-    /// カスタム時のメモリ目標 ("normal" | "low")
-    custom_memory_level: String,
-    /// カスタム時にワーキングセットを強制解放する
-    custom_memory_trim: bool,
-    /// 強制解放までの待ち時間（秒）
-    custom_memory_trim_delay: u32,
-    /// メモリ逼迫通知の間隔（秒）
-    custom_memory_pressure_interval: u32,
-    /// メモリ逼迫通知の強さ ("moderate" | "critical")
-    custom_memory_pressure_level: String,
-    /// Low 目標の再アサート間隔（秒）
-    custom_memory_reassert_interval: u32,
 }
 
 impl Default for Config {
@@ -86,16 +66,6 @@ impl Default for Config {
             hardware_acceleration: true,
             language: "auto".to_string(),
             screen_share: false,
-            mem_focused: "normal".to_string(),
-            mem_unfocused: "low".to_string(),
-            mem_minimized: "low".to_string(),
-            custom_memory_name: "Custom".to_string(),
-            custom_memory_level: "low".to_string(),
-            custom_memory_trim: false,
-            custom_memory_trim_delay: 60,
-            custom_memory_pressure_interval: 30,
-            custom_memory_pressure_level: "moderate".to_string(),
-            custom_memory_reassert_interval: 20,
         }
     }
 }
@@ -120,8 +90,8 @@ fn main() {
             clear_cache_now,
             close_settings,
             open_settings_window,
-            open_custom_settings,
-            close_custom,
+
+
             get_autostart,
             set_autostart,
             get_discord_locale,
@@ -430,30 +400,6 @@ fn get_discord_locale() -> String {
         .unwrap_or_default()
 }
 
-#[tauri::command]
-fn close_custom(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("custom") {
-        let _ = window.close();
-    }
-}
-
-#[tauri::command]
-fn open_custom_settings(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("custom") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return;
-    }
-    let _ = WebviewWindowBuilder::new(&app, "custom", WebviewUrl::App("custom.html".into()))
-        .title("カスタムメモリ設定")
-        .inner_size(460.0, 420.0)
-        .resizable(false)
-        .maximizable(false)
-        .minimizable(false)
-        .background_color(tauri::utils::config::Color(30, 31, 34, 255))
-        .center()
-        .build();
-}
 fn open_settings(app: &AppHandle) {
     SETTINGS_SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("settings") {
@@ -724,43 +670,9 @@ fn supervisor(window: WebviewWindow) {
         };
 
         let want_suspend = false;
-        let target = if minimized {
-            &cfg.mem_minimized
-        } else if !focused {
-            &cfg.mem_unfocused
-        } else {
-            &cfg.mem_focused
-        };
-        let want_low = if target == "custom" {
-            cfg.custom_memory_level == "low"
-        } else {
-            target == "low"
-        };
+        let want_low = minimized || !focused;
 
-        if want_low {
-            if low_since.is_none() { low_since = Some(std::time::Instant::now()); }
-            let pressure_secs = if target == "custom" { cfg.custom_memory_pressure_interval } else { 30 };
-            if last_pressure.elapsed() > Duration::from_secs(pressure_secs.max(5) as u64) {
-                let level = if target == "custom" { cfg.custom_memory_pressure_level.clone() } else { "moderate".to_string() };
-                send_memory_pressure(&window, &level);
-                last_pressure = std::time::Instant::now();
-            }
-            if cfg.custom_memory_trim && cfg.custom_memory_trim_delay > 0 {
-                if let Some(start) = low_since {
-                    if start.elapsed() > Duration::from_secs(cfg.custom_memory_trim_delay as u64)
-                        && last_trim.elapsed() > Duration::from_secs(90)
-                    {
-                        trim_webview_processes();
-                        last_trim = std::time::Instant::now();
-                    }
-                }
-            }
-        } else {
-            low_since = None;
-        }
-
-        let reassert_secs = if target == "custom" { cfg.custom_memory_reassert_interval } else { 20 };
-        let reassert = want_low && last_apply.elapsed() > Duration::from_secs(reassert_secs.max(5) as u64);
+        let reassert = want_low && last_apply.elapsed() > Duration::from_secs(20);
         if want_suspend != suspended || want_low != low_memory || reassert {
             apply_memory_state(&window, want_suspend, want_low);
             suspended = want_suspend;

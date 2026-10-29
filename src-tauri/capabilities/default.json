@@ -4,8 +4,7 @@
     "description": "RustCord のメインウィンドウ用ケイパビリティ",
     "windows": [
         "main",
-        "settings",
-        "custom"
+        "settings"
     ],
     "permissions": [
         "core:default",
