@@ -86,6 +86,18 @@
                 <div class="label">待ち時間（秒）</div>
                 <input type="number" id="cmDelay" min="5" max="3600" step="5" style="width:100px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
             </div>
+            <div class="row">
+                <div class="label">逼迫通知の間隔（秒）</div>
+                <input type="number" id="cmPressureInterval" min="5" max="600" step="5" style="width:100px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
+            </div>
+            <div class="row">
+                <div class="label">逼迫通知の強さ</div>
+                <select id="cmPressureLevel"><option value="moderate">moderate</option><option value="critical">critical</option></select>
+            </div>
+            <div class="row">
+                <div class="label">Low 再設定の間隔（秒）</div>
+                <input type="number" id="cmReassert" min="5" max="600" step="5" style="width:100px;background:#1e1f22;color:#dbdee1;border:1px solid #3f4147;border-radius:6px;padding:6px 8px;" />
+            </div>
             <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
                 <button class="secondary" id="cmCancel">閉じる</button>
                 <button id="cmSave">保存</button>
@@ -441,6 +453,9 @@
             $("cmLevel").value = settings.customMemoryLevel || "low";
             $("cmTrim").checked = !!settings.customMemoryTrim;
             $("cmDelay").value = settings.customMemoryTrimDelay || 60;
+            $("cmPressureInterval").value = settings.customMemoryPressureInterval || 30;
+            $("cmPressureLevel").value = settings.customMemoryPressureLevel || "moderate";
+            $("cmReassert").value = settings.customMemoryReassertInterval || 20;
             $("customModal").style.display = "flex";
         });
         $("cmCancel").addEventListener("click", () => { $("customModal").style.display = "none"; });
@@ -449,6 +464,9 @@
             settings.customMemoryLevel = $("cmLevel").value;
             settings.customMemoryTrim = $("cmTrim").checked;
             settings.customMemoryTrimDelay = Math.max(5, Number($("cmDelay").value) || 60);
+            settings.customMemoryPressureInterval = Math.max(5, Number($("cmPressureInterval").value) || 30);
+            settings.customMemoryPressureLevel = $("cmPressureLevel").value;
+            settings.customMemoryReassertInterval = Math.max(5, Number($("cmReassert").value) || 20);
             try {
                 await invoke("save_settings", { settings });
                 $("customModal").style.display = "none";

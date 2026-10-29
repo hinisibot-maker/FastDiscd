@@ -63,6 +63,12 @@ struct Config {
     custom_memory_trim: bool,
     /// 強制解放までの待ち時間（秒）
     custom_memory_trim_delay: u32,
+    /// メモリ逼迫通知の間隔（秒）
+    custom_memory_pressure_interval: u32,
+    /// メモリ逼迫通知の強さ ("moderate" | "critical")
+    custom_memory_pressure_level: String,
+    /// Low 目標の再アサート間隔（秒）
+    custom_memory_reassert_interval: u32,
 }
 
 impl Default for Config {
@@ -87,6 +93,9 @@ impl Default for Config {
             custom_memory_level: "low".to_string(),
             custom_memory_trim: false,
             custom_memory_trim_delay: 60,
+            custom_memory_pressure_interval: 30,
+            custom_memory_pressure_level: "moderate".to_string(),
+            custom_memory_reassert_interval: 20,
         }
     }
 }
@@ -730,8 +739,10 @@ fn supervisor(window: WebviewWindow) {
 
         if want_low {
             if low_since.is_none() { low_since = Some(std::time::Instant::now()); }
-            if last_pressure.elapsed() > Duration::from_secs(30) {
-                send_memory_pressure(&window, "moderate");
+            let pressure_secs = if target == "custom" { cfg.custom_memory_pressure_interval } else { 30 };
+            if last_pressure.elapsed() > Duration::from_secs(pressure_secs.max(5) as u64) {
+                let level = if target == "custom" { cfg.custom_memory_pressure_level.clone() } else { "moderate".to_string() };
+                send_memory_pressure(&window, &level);
                 last_pressure = std::time::Instant::now();
             }
             if cfg.custom_memory_trim && cfg.custom_memory_trim_delay > 0 {
@@ -748,7 +759,8 @@ fn supervisor(window: WebviewWindow) {
             low_since = None;
         }
 
-        let reassert = want_low && last_apply.elapsed() > Duration::from_secs(20);
+        let reassert_secs = if target == "custom" { cfg.custom_memory_reassert_interval } else { 20 };
+        let reassert = want_low && last_apply.elapsed() > Duration::from_secs(reassert_secs.max(5) as u64);
         if want_suspend != suspended || want_low != low_memory || reassert {
             apply_memory_state(&window, want_suspend, want_low);
             suspended = want_suspend;
