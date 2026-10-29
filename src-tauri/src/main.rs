@@ -1506,14 +1506,18 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                 }
                 let chunks = enc.encode(&nv12, frames == 0);
                 frames += 1;
-                for chunk in chunks {
-                    let key = is_keyframe(&chunk);
+                let mut frame_bytes: Vec<u8> = Vec::new();
+                for chunk in &chunks {
+                    frame_bytes.extend_from_slice(chunk);
+                }
+                if !frame_bytes.is_empty() {
+                    let key = is_keyframe(&frame_bytes);
                     let payload = H264Chunk {
                         seq,
                         key,
                         width,
                         height,
-                        data: base64::engine::general_purpose::STANDARD.encode(chunk),
+                        data: base64::engine::general_purpose::STANDARD.encode(&frame_bytes),
                     };
                     seq += 1;
                     let _ = app.emit("fastdisc://h264", payload);
@@ -1650,6 +1654,8 @@ struct WgcHandler {
     last_adjust: std::time::Instant,
     last_emit: std::time::Instant,
     cost_ema: f32,
+    out_chunks: u64,
+    out_bytes: u64,
 }
 
 impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
@@ -1668,6 +1674,8 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             last_adjust: std::time::Instant::now(),
             last_emit: std::time::Instant::now() - Duration::from_secs(1),
             cost_ema: 0.0,
+            out_chunks: 0,
+            out_bytes: 0,
         })
     }
 
@@ -1724,18 +1732,32 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                 }
             }
             if let Some(enc) = guard.as_mut() {
+                if let encoder::ActiveEncoder::Ffmpeg(ff) = enc {
+                    if !ff.alive() {
+                        log("ffmpeg exited; recreating encoder");
+                        *guard = None;
+                        return Ok(());
+                    }
+                }
                 let nv12 = encoder::bgra_to_nv12(data, width as usize, height as usize);
                 let chunks = enc.encode(&nv12, self.first || self.frames % 120 == 0);
                 self.first = false;
                 self.frames += 1;
-                for chunk in chunks {
-                    let key = is_keyframe(&chunk);
+                // 1フレーム分の NAL をまとめて1イベントにする（IPC・メモリ負荷を下げる）
+                let mut frame_bytes: Vec<u8> = Vec::new();
+                for chunk in &chunks {
+                    frame_bytes.extend_from_slice(chunk);
+                }
+                self.out_chunks += 1;
+                self.out_bytes += frame_bytes.len() as u64;
+                if !frame_bytes.is_empty() {
+                    let key = is_keyframe(&frame_bytes);
                     let payload = H264Chunk {
                         seq: self.seq,
                         key,
                         width,
                         height,
-                        data: base64::engine::general_purpose::STANDARD.encode(chunk),
+                        data: base64::engine::general_purpose::STANDARD.encode(&frame_bytes),
                     };
                     self.seq += 1;
                     let _ = self.app.emit("fastdisc://h264", payload);
@@ -1784,7 +1806,14 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                     ));
                 }
                 if self.frames == 1 || self.frames % 120 == 0 {
-                    log(&format!("h264 frames={} {}x{}", self.frames, width, height));
+                    log(&format!(
+                        "h264 frames={} {}x{} out_chunks={} out_kb={}",
+                        self.frames,
+                        width,
+                        height,
+                        self.out_chunks,
+                        self.out_bytes / 1024
+                    ));
                 }
                 return Ok(());
             }
@@ -2293,20 +2322,22 @@ const SHARE_JS: &str = r##"
     var invoke = tauri.core.invoke;
 
     var errors = 0;
+    var lastGuardAt = 0;
     function guard(message) {
         errors++;
-        try { invoke("js_guard_error", { message: String(message).slice(0, 400) }); } catch (e) { }
-        if (errors >= 3) {
-            try { delete window.DiscordNative; } catch (e) { }
-            try { invoke("disable_screen_share"); } catch (e) { }
-        }
+        var now = Date.now();
+        if (now - lastGuardAt < 2000) return; // ログ・IPCの氾濫を防ぐ
+        lastGuardAt = now;
+        try { invoke("js_guard_error", { message: String(message).slice(0, 600) }); } catch (e) { }
     }
     window.addEventListener("error", function (e) {
         var detail = (e.error && e.error.stack) ? String(e.error.stack).slice(0, 700) : (e.message || "error");
         guard(detail);
     });
     window.addEventListener("unhandledrejection", function (e) {
-        guard((e.reason && e.reason.message) || "rejection");
+        var r = e.reason;
+        var text = r && (r.stack || r.message) ? String(r.stack || r.message) : String(r);
+        guard("rejection: " + text);
     });
 
     function installCapture() {
@@ -2323,6 +2354,7 @@ const SHARE_JS: &str = r##"
         var usingH264 = false;
         var decodedWidth = 0;
         var decodedHeight = 0;
+        var awaitingKey = true;
 
         function b64ToBytes(b64) {
             var bin = atob(b64);
@@ -2330,6 +2362,20 @@ const SHARE_JS: &str = r##"
             var bytes = new Uint8Array(len);
             for (var i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
             return bytes;
+        }
+
+        function codecString(bytes) {
+            for (var i = 0; i + 4 < bytes.length; i++) {
+                var sc = 0;
+                if (bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 1) sc = 3;
+                else if (bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 0 && bytes[i + 3] === 1) sc = 4;
+                if (!sc) continue;
+                if ((bytes[i + sc] & 0x1f) === 7) {
+                    var hex = function (v) { return ("0" + v.toString(16)).slice(-2); };
+                    return "avc1." + hex(bytes[i + sc + 1]) + hex(bytes[i + sc + 2]) + hex(bytes[i + sc + 3]);
+                }
+            }
+            return "avc1.42E01E";
         }
 
         function setupH264() {
@@ -2380,8 +2426,16 @@ const SHARE_JS: &str = r##"
                             usingH264 = true;
                         }
                         if (!decoder) return;
+                        if (decoder.decodeQueueSize > 8) return;
+                        var bytes;
                         try {
-                            if (decoder.state !== "configured" || decodedWidth !== p.width || decodedHeight !== p.height) {
+                            bytes = b64ToBytes(p.data);
+                        } catch (e) {
+                            return;
+                        }
+                        try {
+                            var needConfig = decoder.state !== "configured" || decodedWidth !== p.width || decodedHeight !== p.height;
+                            if (needConfig) {
                                 if (decoder.state === "configured") {
                                     decoder.close();
                                     decoder = null;
@@ -2389,18 +2443,24 @@ const SHARE_JS: &str = r##"
                                 }
                                 decodedWidth = p.width;
                                 decodedHeight = p.height;
+                                awaitingKey = true;
                                 decoder.configure({
-                                    codec: "avc1.42E01E",
+                                    codec: codecString(bytes),
                                     codedWidth: p.width,
                                     codedHeight: p.height,
                                     avc: { format: "annexb" },
                                     optimizeForLatency: true
                                 });
                             }
+                            // 最初のキーフレーム（SPS/PPS/IDR）が来るまではデコードしない
+                            if (awaitingKey) {
+                                if (!p.key) return;
+                                awaitingKey = false;
+                            }
                             decoder.decode(new EncodedVideoChunk({
                                 type: p.key ? "key" : "delta",
                                 timestamp: performance.now() * 1000,
-                                data: b64ToBytes(p.data)
+                                data: bytes
                             }));
                         } catch (e) {
                             guard("h264 decode: " + ((e && e.message) || e));
