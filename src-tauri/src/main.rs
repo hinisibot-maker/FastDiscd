@@ -281,6 +281,20 @@ fn main() {
                                     "wgc-gpu frame {i} {}x{} luma={luma:?}",
                                     frame.width, frame.height
                                 ));
+                                if std::env::var_os("RUSTCORD_TEST_WGC_GPU2").is_some() {
+                                    if let Some(nv12) = gpu.to_nv12(&frame) {
+                                        let y_len = (frame.width * frame.height) as usize;
+                                        let y_mean = nv12[..y_len].iter().map(|v| *v as u64).sum::<u64>() as f64 / y_len as f64;
+                                        let uv_len = nv12.len() - y_len;
+                                        let uv_mean = nv12[y_len..].iter().map(|v| *v as u64).sum::<u64>() as f64 / uv_len as f64;
+                                        log(&format!(
+                                            "wgc-gpu nv12 {}x{} bytes={} y_mean={y_mean:.1} uv_mean={uv_mean:.1}",
+                                            frame.width, frame.height, nv12.len()
+                                        ));
+                                    } else {
+                                        log("wgc-gpu nv12 conversion failed");
+                                    }
+                                }
                             }
                         }
                         std::thread::sleep(Duration::from_millis(16));
