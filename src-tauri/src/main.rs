@@ -875,6 +875,7 @@ struct CaptureSource {
 
 static SELECTED_WINDOW: std::sync::Mutex<Option<isize>> = std::sync::Mutex::new(None);
 static SELECTED_MONITOR: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+static SELECTED_MONITOR_NAME: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 fn encode_thumb(pixels: &[u8], w: i32, h: i32) -> String {
     let rgb: Vec<u8> = pixels
@@ -1090,6 +1091,7 @@ fn reset_selection() {
     *SELECTED_SOURCE.lock().unwrap() = None;
     *SELECTED_WINDOW.lock().unwrap() = None;
     *SELECTED_MONITOR.lock().unwrap() = None;
+    *SELECTED_MONITOR_NAME.lock().unwrap() = None;
 }
 
 #[tauri::command]
@@ -1097,12 +1099,46 @@ fn selection_state() -> bool {
     SELECTED_SOURCE.lock().map(|s| s.is_some()).unwrap_or(false)
 }
 
+/// 指定矩形に対応するモニタのデバイス名（\\.\DISPLAYn）を返す
+fn monitor_name_for_rect(x: i32, y: i32, width: i32, height: i32) -> Option<String> {
+    unsafe {
+        let mut monitors: Vec<HMONITOR> = Vec::new();
+        let _ = EnumDisplayMonitors(
+            None::<HDC>,
+            None::<*const RECT>,
+            Some(enum_monitor_proc),
+            LPARAM(&mut monitors as *mut _ as isize),
+        );
+        for mon in monitors {
+            let mut info = MONITORINFOEXW::default();
+            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+            if GetMonitorInfoW(mon, &mut info as *mut _ as *mut MONITORINFO).as_bool() {
+                let r = info.monitorInfo.rcMonitor;
+                if r.left == x && r.top == y && (r.right - r.left) == width && (r.bottom - r.top) == height {
+                    let name: Vec<u16> = info
+                        .szDevice
+                        .iter()
+                        .copied()
+                        .take_while(|c| *c != 0)
+                        .collect();
+                    return Some(String::from_utf16_lossy(&name));
+                }
+            }
+        }
+    }
+    None
+}
 #[tauri::command]
 fn select_source(app: AppHandle, id: String, kind: String, x: i32, y: i32, width: i32, height: i32) {
     *SELECTED_SOURCE.lock().unwrap() = Some((x, y, width, height));
     let hwnd = id.strip_prefix("window:").and_then(|v| v.parse::<isize>().ok());
     *SELECTED_WINDOW.lock().unwrap() = hwnd;
     *SELECTED_MONITOR.lock().unwrap() = id.strip_prefix("monitor:").and_then(|v| v.parse::<usize>().ok());
+    *SELECTED_MONITOR_NAME.lock().unwrap() = if id.starts_with("monitor:") {
+        monitor_name_for_rect(x, y, width, height)
+    } else {
+        None
+    };
     log(&format!("capture source selected: {id}"));
     if let Some(window) = app.get_webview_window("picker") {
         let _ = window.hide();
@@ -1740,6 +1776,16 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                     }
                 }
                 let nv12 = encoder::bgra_to_nv12(data, width as usize, height as usize);
+                if self.frames % 60 == 0 {
+                    let mut sum = 0u64;
+                    let mut count = 0u64;
+                    for v in nv12.iter().step_by(97) {
+                        sum += *v as u64;
+                        count += 1;
+                    }
+                    let mean = if count > 0 { sum / count } else { 0 };
+                    log(&format!("frame luma mean={mean}"));
+                }
                 let chunks = enc.encode(&nv12, self.first || self.frames % 120 == 0);
                 self.first = false;
                 self.frames += 1;
@@ -1847,11 +1893,43 @@ fn start_wgc_capture(app: AppHandle, monitor_index: usize) -> bool {
         MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
     };
 
-    // windows-capture のモニタインデックスは 1 始まり
-    let monitor = match Monitor::from_index(monitor_index + 1) {
-        Ok(m) => m,
-        Err(e) => {
-            log(&format!("wgc monitor error: {e}"));
+    // EnumDisplayMonitors と windows-capture の並び順は一致しないことがあるため、
+    // 選択された矩形のサイズに一致するモニタを探す（見つからなければインデックス）
+    let selected = *SELECTED_SOURCE.lock().unwrap();
+    let mut monitor = None;
+    // デバイス名（\\.\DISPLAYn）で一致させるのが最も確実
+    if let Some(name) = SELECTED_MONITOR_NAME.lock().unwrap().clone() {
+        if let Ok(list) = Monitor::enumerate() {
+            for m in list {
+                if m.device_name().ok().as_deref() == Some(name.as_str()) {
+                    monitor = Some(m);
+                    break;
+                }
+            }
+        }
+    }
+    if let Some((_, _, w, h)) = selected {
+        if let Ok(list) = Monitor::enumerate() {
+            for m in list {
+                if m.width().ok() == Some(w as u32) && m.height().ok() == Some(h as u32) {
+                    monitor = Some(m);
+                    break;
+                }
+            }
+        }
+    }
+    let monitor = match monitor.or_else(|| Monitor::from_index(monitor_index + 1).ok()) {
+        Some(m) => {
+            log(&format!(
+                "wgc monitor: {} ({}x{})",
+                m.device_name().unwrap_or_default(),
+                m.width().unwrap_or(0),
+                m.height().unwrap_or(0)
+            ));
+            m
+        }
+        None => {
+            log("wgc monitor: not found");
             return false;
         }
     };
@@ -2132,7 +2210,7 @@ use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA};
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
-use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
+use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowRect,
@@ -2449,6 +2527,12 @@ const SHARE_JS: &str = r##"
                                     codedWidth: p.width,
                                     codedHeight: p.height,
                                     avc: { format: "annexb" },
+                                    colorSpace: {
+                                        primaries: "bt709",
+                                        transfer: "bt709",
+                                        matrix: "bt709",
+                                        fullRange: false
+                                    },
                                     optimizeForLatency: true
                                 });
                             }
