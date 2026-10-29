@@ -1780,8 +1780,13 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
             let mut emitted = false;
             if let Some(enc) = guard.as_mut() {
                 if enc.width() != width || enc.height() != height {
-                    let _ = enc.reconfigure(width, height, cfg.screen_share_bitrate_kbps.max(500));
                     gate.reset();
+                    if !enc.reconfigure(width, height, cfg.screen_share_bitrate_kbps.max(500)) {
+                        // 旧エンコーダに新サイズを渡さない（変色防止）
+                        *guard = None;
+                        std::thread::sleep(Duration::from_millis(20));
+                        continue;
+                    }
                 }
                 let chunks = enc.encode(&pixels, width, height, frames == 0);
                 frames += 1;
@@ -2145,8 +2150,10 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                         self.gate.reset();
                         log(&format!("h264 reconfigured: {width}x{height}"));
                     } else {
-                        log("h264 reconfigure failed, recreating encoder");
+                        log("h264 reconfigure failed, skip frame and recreate encoder");
                         *guard = None;
+                        // 旧エンコーダに新サイズのフレームを渡さない（変色防止）
+                        return Ok(());
                     }
                 }
             }
@@ -2911,6 +2918,8 @@ const SHARE_JS: &str = r##"
                 listening = true;
                 listenerReady = Promise.all([
                     tauri.event.listen("fastdisc://frame", function (event) {
+                        // H.264配信中はJPEGフレームを混ぜない（リサイズ時の変色防止）
+                        if (usingH264) return;
                         var img = new Image();
                         img.onload = function () {
                             if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
@@ -2937,7 +2946,10 @@ const SHARE_JS: &str = r##"
                         }
                         h264Chunks++;
                         try {
-                            if (!h264Configured || decodedWidth !== p.width || decodedHeight !== p.height) {
+                            var sizeChanged = decodedWidth !== p.width || decodedHeight !== p.height;
+                            // 解像度変更直後はIDRが来るまで待つ（古いSPSで誤デコードしない）
+                            if (sizeChanged && !p.key) return;
+                            if (!h264Configured || sizeChanged) {
                                 if (decoder.state === "configured") {
                                     decoder.close();
                                     decoder = null;
