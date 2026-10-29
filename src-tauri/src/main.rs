@@ -672,6 +672,20 @@ fn supervisor(window: WebviewWindow) {
         let want_suspend = false;
         let want_low = minimized || !focused;
 
+        if want_low {
+            if last_pressure.elapsed() > Duration::from_secs(5) {
+                send_memory_pressure(&window, "critical");
+                last_pressure = std::time::Instant::now();
+            }
+            if last_trim.elapsed() > Duration::from_secs(5) {
+                trim_webview_processes();
+                last_trim = std::time::Instant::now();
+            }
+            if low_since.is_none() { low_since = Some(std::time::Instant::now()); }
+        } else {
+            low_since = None;
+        }
+
         let reassert = want_low && last_apply.elapsed() > Duration::from_secs(20);
         if want_suspend != suspended || want_low != low_memory || reassert {
             apply_memory_state(&window, want_suspend, want_low);
