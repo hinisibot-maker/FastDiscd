@@ -588,15 +588,13 @@ impl FfmpegEncoder {
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
-                "bgra",
+                "nv12",
                 "-s",
                 &format!("{width}x{height}"),
                 "-r",
                 &fps.to_string(),
                 "-i",
                 "-",
-                "-vf",
-                "scale=out_color_matrix=bt709:out_range=tv:in_range=pc,format=yuv420p",
                 "-c:v",
                 &encoder,
             ]);
@@ -699,9 +697,9 @@ impl FfmpegEncoder {
         self.height
     }
 
-    pub fn encode_bgra(&mut self, bgra: &[u8]) -> Vec<Vec<u8>> {
+    pub fn encode_nv12(&mut self, nv12: &[u8]) -> Vec<Vec<u8>> {
         use std::io::Write;
-        if self.stdin.write_all(bgra).is_err() {
+        if self.stdin.write_all(nv12).is_err() {
             return Vec::new();
         }
         let _ = self.stdin.flush();
@@ -758,14 +756,12 @@ impl ActiveEncoder {
         }
     }
 
-    /// BGRA フレームをエンコードする（MFは内部でNV12へ変換）
+    /// BGRA フレームをNV12へ変換してエンコードする（色変換を一元化）
     pub fn encode(&mut self, bgra: &[u8], width: i32, height: i32, force_key: bool) -> Vec<Vec<u8>> {
+        let nv12 = bgra_to_nv12(bgra, width as usize, height as usize);
         match self {
-            Self::Mf(e) => {
-                let nv12 = bgra_to_nv12(bgra, width as usize, height as usize);
-                e.encode(&nv12, force_key)
-            }
-            Self::Ffmpeg(e) => e.encode_bgra(bgra),
+            Self::Mf(e) => e.encode(&nv12, force_key),
+            Self::Ffmpeg(e) => e.encode_nv12(&nv12),
         }
     }
 
