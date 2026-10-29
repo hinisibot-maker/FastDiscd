@@ -11,6 +11,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::utils::config::BackgroundThrottlingPolicy;
 mod encoder;
+mod wgc_gpu;
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
@@ -247,6 +248,42 @@ fn main() {
                 CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
                 let gen = CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst);
                 start_self_capture(app.handle().clone(), gen);
+            }
+            if std::env::var_os("RUSTCORD_TEST_WGC_GPU").is_some() {
+                std::thread::spawn(|| {
+                    let mut monitors: Vec<windows::Win32::Graphics::Gdi::HMONITOR> = Vec::new();
+                    unsafe {
+                        let _ = windows::Win32::Graphics::Gdi::EnumDisplayMonitors(
+                            None,
+                            None,
+                            Some(enum_monitor_proc),
+                            LPARAM(&mut monitors as *mut _ as isize),
+                        );
+                    }
+                    let Some(hmon) = monitors.first().copied() else {
+                        log("wgc-gpu: no monitor");
+                        return;
+                    };
+                    let Some(mut gpu) = wgc_gpu::WgcGpu::for_monitor(hmon.0 as isize) else {
+                        log("wgc-gpu: init failed");
+                        return;
+                    };
+                    log(&format!("wgc-gpu: size={:?}", gpu.size()));
+                    for i in 0..600 {
+                        if let Some(frame) = gpu.try_next() {
+                            if i % 30 == 0 {
+                                let luma = gpu.mean_luma(&frame);
+                                log(&format!(
+                                    "wgc-gpu frame {i} {}x{} luma={luma:?}",
+                                    frame.width, frame.height
+                                ));
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(16));
+                    }
+                    gpu.stop();
+                    log("wgc-gpu: done");
+                });
             }
             if std::env::var_os("RUSTCORD_TEST_PROBE").is_some() {
                 let handle = app.handle().clone();
