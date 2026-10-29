@@ -984,6 +984,7 @@ fn close_picker(app: AppHandle) {
     if let Some(window) = app.get_webview_window("picker") {
         let _ = window.hide();
     }
+    let _ = app.emit("fastdisc://source-cancelled", ());
 }
 #[tauri::command]
 fn selection_state() -> bool {
@@ -1839,15 +1840,24 @@ const SHARE_JS: &str = r##"
                             invoke("show_source_picker").catch(function (e) {
                                 try { invoke("js_guard_error", { message: "picker invoke failed: " + e }); } catch (e2) { }
                             });
-                            var tries = 0;
+                            var done = false;
+                            var finish = function (ok) { if (done) return; done = true; resolve(ok); };
+                            try {
+                                var ev = window.__TAURI__ && window.__TAURI__.event;
+                                if (ev && ev.listen) {
+                                    ev.listen("fastdisc://source-selected", function () { finish(true); });
+                                    ev.listen("fastdisc://source-cancelled", function () { finish(false); });
+                                }
+                            } catch (e) { }
                             var timer = setInterval(function () {
-                                tries++;
                                 invoke("selection_state").then(function (ok) {
-                                    if (ok || tries > 300) { clearInterval(timer); resolve(); }
-                                }).catch(function () { clearInterval(timer); resolve(); });
+                                    if (ok) { clearInterval(timer); finish(true); }
+                                }).catch(function () { });
                             }, 400);
+                            setTimeout(function () { clearInterval(timer); finish(false); }, 180000);
                         });
-                    }).then(function () {
+                    }).then(function (picked) {
+                        if (picked === false) { throw new Error("capture cancelled"); }
                         return ensure();
                     }).then(function () {
                     var stream = canvas.captureStream(30);
