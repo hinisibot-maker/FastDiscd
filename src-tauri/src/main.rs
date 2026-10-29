@@ -1874,6 +1874,9 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                 match created {
                     Some(enc) => {
                         log(&format!("h264 encoder: {}", enc.describe()));
+                        // 新しいエンコーダでは SPS/PPS から送り直す
+                        self.gate.reset();
+                        self.first = true;
                         *guard = Some(enc);
                     }
                     None => log("h264 encoder unavailable, falling back to JPEG"),
@@ -1881,6 +1884,15 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
             }
             if let Some(enc) = guard.as_mut() {
                 if enc.width() != width || enc.height() != height {
+                    // サイズ変更では必ずゲートをリセットし、新しい SPS/PPS を送る
+                    log(&format!(
+                        "h264 resize: {}x{} -> {width}x{height}",
+                        enc.width(),
+                        enc.height()
+                    ));
+                    self.gate.reset();
+                    self.first = true;
+                    self.last_emit = std::time::Instant::now() - Duration::from_secs(1);
                     if enc.reconfigure(width, height, self.bitrate) {
                         // 解像度変更後は IDR を強制してデコーダに新しい SPS を届ける
                         enc.request_keyframe();

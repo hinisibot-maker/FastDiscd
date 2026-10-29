@@ -595,6 +595,8 @@ impl FfmpegEncoder {
                 &fps.to_string(),
                 "-i",
                 "-",
+                "-vf",
+                "scale=out_color_matrix=bt709:out_range=tv:in_range=pc,format=yuv420p",
                 "-c:v",
                 &encoder,
             ]);
