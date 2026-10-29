@@ -66,6 +66,8 @@ struct Config {
     screen_share_quality: String,
     /// 静止時もフレームを送り続ける（既定OFF）
     screen_share_keepalive: bool,
+    /// 配信の最大幅（0=ソースのまま）
+    screen_share_max_width: u32,
 }
 
 impl Default for Config {
@@ -90,6 +92,7 @@ impl Default for Config {
             screen_share_encoder: "auto".to_string(),
             screen_share_quality: "balanced".to_string(),
             screen_share_keepalive: false,
+            screen_share_max_width: 0,
         }
     }
 }
@@ -1608,7 +1611,7 @@ fn grab_webview_png(app: &AppHandle) -> Option<Vec<u8>> {
         }));
         unsafe {
             let _ = core.CapturePreview(
-                COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
                 &stream,
                 &handler,
             );
@@ -1830,10 +1833,10 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                 continue;
             };
             // 配信負荷を抑えるため最大960pxへ縮小する
-            let img = if img.width() > 960 {
-                let ratio = 960.0 / img.width() as f32;
+            let img = if img.width() > 800 {
+                let ratio = 800.0 / img.width() as f32;
                 let nh = ((img.height() as f32) * ratio) as u32;
-                img.resize_exact(960, nh.max(16), image::imageops::FilterType::Triangle)
+                img.resize_exact(800, nh.max(16), image::imageops::FilterType::Triangle)
             } else {
                 img
             };
@@ -1851,17 +1854,18 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                 let created = encoder::FfmpegEncoder::create(
                     width,
                     height,
-                    cfg.screen_share_max_fps.clamp(5, 5),
+                    3u32,
                     cfg.screen_share_bitrate_kbps.max(500),
                     &cfg.screen_share_encoder,
                     &cfg.screen_share_quality,
+                    cfg.screen_share_max_width,
                 )
                 .map(encoder::ActiveEncoder::Ffmpeg)
                 .or_else(|| {
                     encoder::H264Encoder::create(
                         width,
                         height,
-                        cfg.screen_share_max_fps.clamp(5, 5),
+                        3u32,
                         cfg.screen_share_bitrate_kbps.max(500),
                     )
                     .map(encoder::ActiveEncoder::Mf)
@@ -1910,7 +1914,7 @@ fn start_self_capture(app: AppHandle, gen: u64) -> bool {
                 }
             }
 
-            let fps = cfg.screen_share_max_fps.clamp(5, 5) as u64;
+            let fps = 3u64;
             let target = Duration::from_millis(1000 / fps);
             let elapsed = started.elapsed();
             if elapsed < target {
@@ -2292,6 +2296,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                     let bitrate = self.bitrate;
                     let encoder_pref = cfg.screen_share_encoder.clone();
                     let quality = cfg.screen_share_quality.clone();
+                    let max_width = cfg.screen_share_max_width;
                     std::thread::spawn(move || {
                         log(&format!("h264 create async {}x{}", wanted.0, wanted.1));
                         let created = encoder::FfmpegEncoder::create(
@@ -2301,6 +2306,7 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
                             bitrate,
                             &encoder_pref,
                             &quality,
+                            max_width,
                         )
                         .map(encoder::ActiveEncoder::Ffmpeg)
                         .or_else(|| {
@@ -2807,7 +2813,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2Controller2, COREWEBVIEW2_COLOR,
     ICoreWebView2, ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_19, ICoreWebView2_27,
     ICoreWebView2_3,
-    COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+    COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
 };
 use webview2_com::{
@@ -3041,7 +3047,7 @@ const SHARE_JS: &str = r##"
         var canvas = document.createElement("canvas");
         canvas.width = 1280;
         canvas.height = 720;
-        var ctx = canvas.getContext("2d");
+        var ctx = canvas.getContext("2d", { alpha: false });
         var listening = false;
 
         var decoder = null;
@@ -3075,7 +3081,7 @@ const SHARE_JS: &str = r##"
         function resetCanvas(w, h) {
             canvas.width = w > 0 ? w : 1280;
             canvas.height = h > 0 ? h : 720;
-            ctx = canvas.getContext("2d");
+            ctx = canvas.getContext("2d", { alpha: false });
             h264Configured = false;
             decodedWidth = 0;
             decodedHeight = 0;

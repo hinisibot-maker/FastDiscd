@@ -581,7 +581,7 @@ fn available_encoders(ffmpeg: &std::path::Path) -> Vec<String> {
 }
 
 impl FfmpegEncoder {
-    pub fn create(width: i32, height: i32, fps: u32, bitrate_kbps: u32, preferred: &str, quality: &str) -> Option<Self> {
+    pub fn create(width: i32, height: i32, fps: u32, bitrate_kbps: u32, preferred: &str, quality: &str, max_width: u32) -> Option<Self> {
         let ffmpeg = find_ffmpeg()?;
         let width = (width.max(16) + 1) & !1;
         let height = (height.max(16) + 1) & !1;
@@ -620,6 +620,11 @@ impl FfmpegEncoder {
                 "-c:v",
                 &encoder,
             ]);
+            if max_width > 0 && (width as u32) > max_width {
+                let scale = format!("scale={max_width}:-2");
+                cmd.args(["-vf", &scale]);
+                crate::log(&format!("ffmpeg downscale: {width}x{height} -> max {max_width}"));
+            }
             match encoder.as_str() {
                 "h264_nvenc" => {
                     let preset = match quality {

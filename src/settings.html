@@ -174,6 +174,18 @@
             </div>
             <input type="checkbox" id="screenShareKeepalive" />
         </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="maxWidth.label"></span>
+                <div class="hint" data-i18n="maxWidth.hint"></div>
+            </div>
+            <select id="screenShareMaxWidth">
+                <option value="0" data-i18n="maxWidth.source"></option>
+                <option value="1920">1920</option>
+                <option value="1280">1280</option>
+                <option value="960">960</option>
+            </select>
+        </div>
     </div>
     <div class="group">
         <div class="row">
@@ -328,6 +340,9 @@
                 "quality.quality": "Quality",
                 "keepalive.label": "Keep sending when screen is still",
                 "keepalive.hint": "Windows only sends frames when the screen changes. Enable to repeat the last frame at the target FPS (uses more CPU).",
+                "maxWidth.label": "Max capture width",
+                "maxWidth.hint": "Lower this if the app feels heavy (1280 is a good balance).",
+                "maxWidth.source": "Source (original)",
                 "autoQuality.label": "Adaptive quality",
                 "autoQuality.hint": "Lowers bitrate/fps automatically under load (off = fixed quality).",
                 "saveRestart": "Save and restart",
@@ -402,6 +417,9 @@
                 "quality.quality": "画質優先",
                 "keepalive.label": "静止時もフレームを送り続ける",
                 "keepalive.hint": "Windowsは画面が変わった時だけフレームを送ります。ONにすると目標FPSで同じフレームを送り続けます（CPU負荷増）。",
+                "maxWidth.label": "配信の最大幅",
+                "maxWidth.hint": "重いと感じたら下げてください（1280が目安）。",
+                "maxWidth.source": "ソースのまま",
                 "autoQuality.label": "自動画質調整",
                 "autoQuality.hint": "負荷に応じてビットレートとfpsを自動で下げます（OFFで固定画質）。",
                 "saveRestart": "保存して再起動",
@@ -462,6 +480,7 @@
             $("screenShareMaxFps").value = String(s.screenShareMaxFps || 30);
             $("screenShareQuality").value = s.screenShareQuality || "balanced";
             $("screenShareKeepalive").checked = s.screenShareKeepalive === true;
+            $("screenShareMaxWidth").value = String(s.screenShareMaxWidth || 0);
             pttCode = s.pushToTalkCode || "";
             updateZoomLabel();
             applyLanguage();
@@ -487,6 +506,7 @@
                 screenShareMaxFps: Number($("screenShareMaxFps").value) || 30,
                 screenShareQuality: $("screenShareQuality").value,
                 screenShareKeepalive: $("screenShareKeepalive").checked,
+                screenShareMaxWidth: Number($("screenShareMaxWidth").value) || 0,
             };
         }
 
@@ -525,6 +545,7 @@
         $("screenShareMaxFps").addEventListener("change", save);
         $("screenShareQuality").addEventListener("change", save);
         $("screenShareKeepalive").addEventListener("change", save);
+        $("screenShareMaxWidth").addEventListener("change", save);
         $("saveRestart").addEventListener("click", async () => {
             const payload = collect();
             try {
