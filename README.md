@@ -31,7 +31,7 @@ A lightweight desktop client for Discord, built with **Rust + Windows' built-in 
 | Voice chat | ✅ Works | WebRTC; microphone permission auto-granted; Discord's voice settings apply |
 | Notifications | ✅ Works | Windows toast notifications via WebView2 (permission auto-granted) |
 | Push-to-talk | ✅ Enhanced | **Works globally** — talking works even when another window is focused (key polling in Rust) |
-| Screen sharing | △ Experimental | WGC capture + H.264 (Media Foundation) + WebCodecs, screen/window picker with previews, adaptive bitrate/fps, no audio |
+| Screen sharing | △ Experimental | WGC capture + H.264 (NVENC / Intel Quick Sync / AMD AMF / software) + WebCodecs, screen/window picker with previews, no audio |
 | Global hotkeys (mute, etc.) | △ Partial | PTT only; other actions planned |
 | Zoom level | ✅ Custom | Discord's web app has no zoom setting, so FastDiscd provides its own |
 | Startup behavior / tray | ✅ Full | Launch at login, start minimized, minimize to tray, GPU toggle |
@@ -172,7 +172,7 @@ Especially useful: reports on memory usage with many channels open, and on diffe
 
 Screen sharing encodes with H.264 and can use your GPU's video encoder:
 
-- **NVIDIA (NVENC) / Intel (Quick Sync) / AMD (AMF)** — used automatically when `ffmpeg.exe` is available
+- **NVIDIA (NVENC)** — verified\n- **Intel iGPU (Quick Sync)** — verified\n- **AMD / Radeon (AMF)** — supported, not yet verified on hardware\n- Encoder can be forced in *Settings → Encoder* (Auto / NVENC / Quick Sync / AMF / Software)
 - **Media Foundation H.264** — built-in fallback (software on most systems)
 - **JPEG** — legacy fallback (`Settings → Stream codec → JPEG`)
 
