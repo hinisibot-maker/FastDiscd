@@ -87,9 +87,13 @@
 
         document.getElementById("cancel").addEventListener("click", () => invoke("close_picker"));
 
-        invoke("list_sources").then(list => { sources = list || []; render(); }).catch((e) => {
-            document.getElementById("grid").textContent = "読み込みに失敗: " + e;
-        });
+        function load() {
+            invoke("list_sources").then(list => { sources = list || []; render(); }).catch((e) => {
+                document.getElementById("grid").textContent = "読み込みに失敗: " + e;
+            });
+        }
+        window.addEventListener("focus", load);
+        load();
     </script>
 </body>
 

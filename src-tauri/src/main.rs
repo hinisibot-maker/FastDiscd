@@ -169,6 +169,19 @@ fn main() {
                 open_settings(app.handle());
             }
 
+            {
+                let app_handle = app.handle().clone();
+                let _ = WebviewWindowBuilder::new(&app_handle, "picker", WebviewUrl::App("picker.html".into()))
+                    .title("配信する画面を選択")
+                    .inner_size(720.0, 620.0)
+                    .resizable(true)
+                    .maximizable(false)
+                    .minimizable(false)
+                    .visible(false)
+                    .background_color(tauri::utils::config::Color(30, 31, 34, 255))
+                    .build();
+            }
+
             if std::env::var_os("RUSTCORD_TEST_WGC").is_some() {
                 *SELECTED_MONITOR.lock().unwrap() = Some(0);
                 CAPTURING.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -957,42 +970,19 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, data: LPARAM) -> windows:
 #[tauri::command]
 fn show_source_picker(app: AppHandle) {
     log("show_source_picker invoked");
-    if let Some(window) = app.get_webview_window("picker") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return;
+    match app.get_webview_window("picker") {
+        Some(window) => {
+            let _ = window.show();
+            let _ = window.set_focus();
+            log("picker shown");
+        }
+        None => log("picker window missing"),
     }
-    // ウィンドウ生成はメインスレッドで行う（IPCスレッドから直接buildすると固まる）
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if handle.get_webview_window("picker").is_some() {
-            return;
-        }
-        let built = WebviewWindowBuilder::new(&handle, "picker", WebviewUrl::App("picker.html".into()))
-            .title("配信する画面を選択")
-            .inner_size(720.0, 620.0)
-            .resizable(true)
-            .maximizable(false)
-            .minimizable(false)
-            .background_color(tauri::utils::config::Color(30, 31, 34, 255))
-            .center()
-            .build();
-        match built {
-            Ok(window) => {
-                let _ = window.show();
-                let _ = window.set_focus();
-                let _ = window.set_always_on_top(true);
-                log("picker window created");
-            }
-            Err(e) => log(&format!("picker window error: {e}")),
-        }
-    });
 }
-
 #[tauri::command]
 fn close_picker(app: AppHandle) {
     if let Some(window) = app.get_webview_window("picker") {
-        let _ = window.close();
+        let _ = window.hide();
     }
 }
 #[tauri::command]
@@ -1008,7 +998,7 @@ fn select_source(app: AppHandle, id: String, kind: String, x: i32, y: i32, width
     *SELECTED_MONITOR.lock().unwrap() = id.strip_prefix("monitor:").and_then(|v| v.parse::<usize>().ok());
     log(&format!("capture source selected: {id}"));
     if let Some(window) = app.get_webview_window("picker") {
-        let _ = window.close();
+        let _ = window.hide();
     }
     let _ = app.emit("fastdisc://source-selected", ());
 }
