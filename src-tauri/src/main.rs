@@ -68,6 +68,8 @@ struct Config {
     screen_share_keepalive: bool,
     /// 配信の最大幅（0=ソースのまま）
     screen_share_max_width: u32,
+    /// 遅延バッファのフレーム数（0=OFF）
+    screen_share_buffer_frames: u32,
 }
 
 impl Default for Config {
@@ -93,6 +95,7 @@ impl Default for Config {
             screen_share_quality: "balanced".to_string(),
             screen_share_keepalive: false,
             screen_share_max_width: 0,
+            screen_share_buffer_frames: 0,
         }
     }
 }
@@ -108,6 +111,7 @@ static FRAME_CHANNEL: std::sync::Mutex<Option<tauri::ipc::Channel<tauri::ipc::In
     std::sync::Mutex::new(None);
 static LAST_SENT: std::sync::Mutex<Option<(Vec<u8>, bool, i32, i32, std::time::Instant)>> =
     std::sync::Mutex::new(None);
+static DRAGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static ENCODER_CREATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static FORCE_JPEG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static LAST_RAW_FRAME: std::sync::Mutex<Option<(Vec<u8>, i32, i32)>> = std::sync::Mutex::new(None);
@@ -152,6 +156,10 @@ fn main() {
             capture_stop,
             js_guard_error,
             window_minimize,
+            window_outer_position,
+            window_scale_factor,
+            window_move_to,
+            set_dragging,
             window_toggle_maximize,
             window_close,
             set_zoom,
@@ -517,6 +525,29 @@ fn open_settings_window(app: AppHandle) {
 }
 
 
+
+#[tauri::command]
+fn window_outer_position(window: WebviewWindow) -> (i32, i32) {
+    window
+        .outer_position()
+        .map(|p| (p.x, p.y))
+        .unwrap_or((0, 0))
+}
+
+#[tauri::command]
+fn window_scale_factor(window: WebviewWindow) -> f64 {
+    window.scale_factor().unwrap_or(1.0)
+}
+
+#[tauri::command]
+fn window_move_to(window: WebviewWindow, x: i32, y: i32) {
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+#[tauri::command]
+fn set_dragging(active: bool) {
+    DRAGGING.store(active, std::sync::atomic::Ordering::SeqCst);
+}
 #[tauri::command]
 fn window_minimize(window: WebviewWindow) {
     if let Ok(hwnd) = window.hwnd() {
@@ -896,7 +927,8 @@ fn supervisor(window: WebviewWindow) {
         let want_low = minimized || !focused;
 
         let sharing = CAPTURING.load(std::sync::atomic::Ordering::SeqCst);
-        if want_low && !sharing {
+        let dragging = DRAGGING.load(std::sync::atomic::Ordering::SeqCst);
+        if want_low && !sharing && !dragging {
             if last_pressure.elapsed() > Duration::from_secs(5) {
                 send_memory_pressure(&window, "critical");
                 last_pressure = std::time::Instant::now();
@@ -2135,17 +2167,24 @@ struct H264Gate {
     sps_pps: Vec<u8>,
     config_sent: bool,
     got_key: bool,
+    pending: std::collections::VecDeque<Vec<u8>>,
 }
 
 impl H264Gate {
     fn new() -> Self {
-        Self { sps_pps: Vec::new(), config_sent: false, got_key: false }
+        Self {
+            sps_pps: Vec::new(),
+            config_sent: false,
+            got_key: false,
+            pending: std::collections::VecDeque::new(),
+        }
     }
 
     fn reset(&mut self) {
         self.sps_pps.clear();
         self.config_sent = false;
         self.got_key = false;
+        self.pending.clear();
     }
 
     /// 1フレーム分の Annex-B を受け取り、必要ならイベントを送る
@@ -2185,6 +2224,10 @@ impl H264Gate {
             if LAST_H264_KEY.lock().map(|g| g.is_none()).unwrap_or(false) {
                 *LAST_H264_KEY.lock().unwrap() = Some(out.clone());
             }
+            while let Some(buffered) = self.pending.pop_front() {
+                send_frame(app, 0, false, width, height, *seq, &buffered);
+                *seq += 1;
+            }
             send_frame(app, 0, true, width, height, *seq, &out);
             *seq += 1;
             if !self.got_key {
@@ -2193,8 +2236,19 @@ impl H264Gate {
             self.got_key = true;
             true
         } else if self.got_key {
-            send_frame(app, 0, false, width, height, *seq, frame);
-            *seq += 1;
+            let buffer_frames = config().screen_share_buffer_frames as usize;
+            if buffer_frames == 0 {
+                send_frame(app, 0, false, width, height, *seq, frame);
+                *seq += 1;
+            } else {
+                self.pending.push_back(frame.to_vec());
+                while self.pending.len() > buffer_frames {
+                    if let Some(buffered) = self.pending.pop_front() {
+                        send_frame(app, 0, false, width, height, *seq, &buffered);
+                        *seq += 1;
+                    }
+                }
+            }
             true
         } else {
             false
@@ -2991,11 +3045,54 @@ const TITLEBAR_JS: &str = r##"
         setTimeout(reserveSpace, 3500);
 
         // 上部 32px の余白はウィンドウドラッグ（Discord の操作要素は除外）
+        // ネイティブのモーダル移動ループはWebView2の描画を止めるため、JSで位置を更新する
+        var dragging = false;
+        var dragOffX = 0;
+        var dragOffY = 0;
+        var dragRaf = 0;
+        var dragScale = 1;
+        var pendingX = 0;
+        var pendingY = 0;
+
+        function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            if (dragRaf) {
+                cancelAnimationFrame(dragRaf);
+                dragRaf = 0;
+            }
+            invoke("set_dragging", { active: false }).catch(function () { });
+        }
+
         document.addEventListener("mousedown", function (e) {
             if (e.button !== 0 || e.clientY > 32) return;
             if (e.target.closest("a,button,input,textarea,select,[role='button'],[role='link'],[contenteditable='true'],#rc-titlebar")) return;
-            try { current.startDragging(); } catch (err) { }
+            e.preventDefault();
+            Promise.all([invoke("window_outer_position"), invoke("window_scale_factor")]).then(function (r) {
+                var pos = r[0];
+                dragScale = r[1] || 1;
+                dragOffX = e.screenX * dragScale - pos[0];
+                dragOffY = e.screenY * dragScale - pos[1];
+                dragging = true;
+                invoke("set_dragging", { active: true }).catch(function () { });
+            }).catch(function () {
+                try { current.startDragging(); } catch (err) { }
+            });
         }, true);
+
+        document.addEventListener("mousemove", function (e) {
+            if (!dragging) return;
+            pendingX = Math.round(e.screenX * dragScale - dragOffX);
+            pendingY = Math.round(e.screenY * dragScale - dragOffY);
+            if (dragRaf) return;
+            dragRaf = requestAnimationFrame(function () {
+                dragRaf = 0;
+                invoke("window_move_to", { x: pendingX, y: pendingY }).catch(function () { });
+            });
+        }, true);
+
+        document.addEventListener("mouseup", endDrag, true);
+        window.addEventListener("blur", endDrag);
 
         document.addEventListener("dblclick", function (e) {
             if (e.clientY > 32) return;

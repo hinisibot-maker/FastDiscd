@@ -186,6 +186,17 @@
                 <option value="960">960</option>
             </select>
         </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="buffer.label"></span>
+                <div class="hint" data-i18n="buffer.hint"></div>
+            </div>
+            <select id="screenShareBufferFrames">
+                <option value="0" data-i18n="buffer.off"></option>
+                <option value="2">2</option>
+                <option value="4">4</option>
+            </select>
+        </div>
     </div>
     <div class="group">
         <div class="row">
@@ -343,6 +354,9 @@
                 "maxWidth.label": "Max capture width",
                 "maxWidth.hint": "Lower this if the app feels heavy (1280 is a good balance).",
                 "maxWidth.source": "Source (original)",
+                "buffer.label": "Latency buffer",
+                "buffer.hint": "Buffers frames to smooth out stutter. Adds delay (2 frames = about 67ms at 30fps).",
+                "buffer.off": "Off",
                 "autoQuality.label": "Adaptive quality",
                 "autoQuality.hint": "Lowers bitrate/fps automatically under load (off = fixed quality).",
                 "saveRestart": "Save and restart",
@@ -420,6 +434,9 @@
                 "maxWidth.label": "配信の最大幅",
                 "maxWidth.hint": "重いと感じたら下げてください（1280が目安）。",
                 "maxWidth.source": "ソースのまま",
+                "buffer.label": "遅延バッファ",
+                "buffer.hint": "フレームを溜めてカクつきを減らします。遅延が増えます（30fpsで2フレーム≈67ms）。",
+                "buffer.off": "オフ",
                 "autoQuality.label": "自動画質調整",
                 "autoQuality.hint": "負荷に応じてビットレートとfpsを自動で下げます（OFFで固定画質）。",
                 "saveRestart": "保存して再起動",
@@ -481,6 +498,7 @@
             $("screenShareQuality").value = s.screenShareQuality || "balanced";
             $("screenShareKeepalive").checked = s.screenShareKeepalive === true;
             $("screenShareMaxWidth").value = String(s.screenShareMaxWidth || 0);
+            $("screenShareBufferFrames").value = String(s.screenShareBufferFrames || 0);
             pttCode = s.pushToTalkCode || "";
             updateZoomLabel();
             applyLanguage();
@@ -507,6 +525,7 @@
                 screenShareQuality: $("screenShareQuality").value,
                 screenShareKeepalive: $("screenShareKeepalive").checked,
                 screenShareMaxWidth: Number($("screenShareMaxWidth").value) || 0,
+                screenShareBufferFrames: Number($("screenShareBufferFrames").value) || 0,
             };
         }
 
@@ -546,6 +565,7 @@
         $("screenShareQuality").addEventListener("change", save);
         $("screenShareKeepalive").addEventListener("change", save);
         $("screenShareMaxWidth").addEventListener("change", save);
+        $("screenShareBufferFrames").addEventListener("change", save);
         $("saveRestart").addEventListener("click", async () => {
             const payload = collect();
             try {

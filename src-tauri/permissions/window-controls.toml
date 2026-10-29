@@ -5,6 +5,10 @@ commands.allow = [
     "window_minimize",
     "window_toggle_maximize",
     "window_close",
+    "window_outer_position",
+    "window_scale_factor",
+    "window_move_to",
+    "set_dragging",
 ]
 
 [[permission]]
