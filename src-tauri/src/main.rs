@@ -1733,9 +1733,11 @@ const SHARE_JS: &str = r##"
             Object.defineProperty(proto, "getDisplayMedia", {
                 configurable: true,
                 value: function () {
+                    try { invoke("js_guard_error", { message: "getDisplayMedia called" }); } catch (e) { }
                     return invoke("list_sources").then(function (sources) {
                         if (!sources || sources.length <= 1) return;
                         return new Promise(function (resolve) {
+                            try { invoke("js_guard_error", { message: "showing picker n=" + sources.length }); } catch (e) { }
                             invoke("show_source_picker");
                             var tries = 0;
                             var timer = setInterval(function () {
