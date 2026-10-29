@@ -167,6 +167,13 @@
                 <option value="quality" data-i18n="quality.quality"></option>
             </select>
         </div>
+        <div class="row">
+            <div class="label">
+                <span data-i18n="keepalive.label"></span>
+                <div class="hint" data-i18n="keepalive.hint"></div>
+            </div>
+            <input type="checkbox" id="screenShareKeepalive" />
+        </div>
     </div>
     <div class="group">
         <div class="row">
@@ -319,6 +326,8 @@
                 "quality.speed": "Speed",
                 "quality.balanced": "Balanced",
                 "quality.quality": "Quality",
+                "keepalive.label": "Keep sending when screen is still",
+                "keepalive.hint": "Windows only sends frames when the screen changes. Enable to repeat the last frame at the target FPS (uses more CPU).",
                 "autoQuality.label": "Adaptive quality",
                 "autoQuality.hint": "Lowers bitrate/fps automatically under load (off = fixed quality).",
                 "saveRestart": "Save and restart",
@@ -391,6 +400,8 @@
                 "quality.speed": "速度優先",
                 "quality.balanced": "バランス",
                 "quality.quality": "画質優先",
+                "keepalive.label": "静止時もフレームを送り続ける",
+                "keepalive.hint": "Windowsは画面が変わった時だけフレームを送ります。ONにすると目標FPSで同じフレームを送り続けます（CPU負荷増）。",
                 "autoQuality.label": "自動画質調整",
                 "autoQuality.hint": "負荷に応じてビットレートとfpsを自動で下げます（OFFで固定画質）。",
                 "saveRestart": "保存して再起動",
@@ -450,6 +461,7 @@
             $("screenShareEncoder").value = s.screenShareEncoder || "auto";
             $("screenShareMaxFps").value = String(s.screenShareMaxFps || 30);
             $("screenShareQuality").value = s.screenShareQuality || "balanced";
+            $("screenShareKeepalive").checked = s.screenShareKeepalive === true;
             pttCode = s.pushToTalkCode || "";
             updateZoomLabel();
             applyLanguage();
@@ -474,6 +486,7 @@
                 screenShareEncoder: $("screenShareEncoder").value,
                 screenShareMaxFps: Number($("screenShareMaxFps").value) || 30,
                 screenShareQuality: $("screenShareQuality").value,
+                screenShareKeepalive: $("screenShareKeepalive").checked,
             };
         }
 
@@ -511,6 +524,7 @@
         $("screenShareEncoder").addEventListener("change", save);
         $("screenShareMaxFps").addEventListener("change", save);
         $("screenShareQuality").addEventListener("change", save);
+        $("screenShareKeepalive").addEventListener("change", save);
         $("saveRestart").addEventListener("click", async () => {
             const payload = collect();
             try {

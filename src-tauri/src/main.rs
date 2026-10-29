@@ -64,6 +64,8 @@ struct Config {
     screen_share_encoder: String,
     /// 画質: speed / balanced / quality
     screen_share_quality: String,
+    /// 静止時もフレームを送り続ける（既定OFF）
+    screen_share_keepalive: bool,
 }
 
 impl Default for Config {
@@ -87,6 +89,7 @@ impl Default for Config {
             auto_quality_adjust: false,
             screen_share_encoder: "auto".to_string(),
             screen_share_quality: "balanced".to_string(),
+            screen_share_keepalive: false,
         }
     }
 }
@@ -99,6 +102,8 @@ static MAIN_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsiz
 static CAPTURE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static ENCODER: std::sync::Mutex<Option<encoder::ActiveEncoder>> = std::sync::Mutex::new(None);
 static FRAME_CHANNEL: std::sync::Mutex<Option<tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>> =
+    std::sync::Mutex::new(None);
+static LAST_SENT: std::sync::Mutex<Option<(Vec<u8>, bool, i32, i32, std::time::Instant)>> =
     std::sync::Mutex::new(None);
 static ENCODER_CREATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static FORCE_JPEG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2081,6 +2086,10 @@ fn send_frame(app: &AppHandle, codec: u8, key: bool, width: i32, height: i32, se
             buf.extend_from_slice(&0u32.to_le_bytes());
             buf.extend_from_slice(payload);
             if channel.send(tauri::ipc::InvokeResponseBody::Raw(buf)).is_ok() {
+                if codec == 0 {
+                    *LAST_SENT.lock().unwrap() =
+                        Some((payload.to_vec(), key, width, height, std::time::Instant::now()));
+                }
                 return;
             }
         }
@@ -2094,9 +2103,28 @@ fn send_frame(app: &AppHandle, codec: u8, key: bool, width: i32, height: i32, se
             data: base64::engine::general_purpose::STANDARD.encode(payload),
         };
         let _ = app.emit("fastdisc://h264", chunk);
+        *LAST_SENT.lock().unwrap() = Some((payload.to_vec(), key, width, height, std::time::Instant::now()));
     } else {
         let data = base64::engine::general_purpose::STANDARD.encode(payload);
         let _ = app.emit("fastdisc://frame", data);
+    }
+}
+
+/// 静止時の埋め草フレーム（LAST_SENT を更新しない＝実フレーム到着を妨げない）
+fn send_frame_keepalive(width: i32, height: i32, payload: &[u8]) {
+    if let Ok(guard) = FRAME_CHANNEL.lock() {
+        if let Some(channel) = guard.as_ref() {
+            let mut buf = Vec::with_capacity(16 + payload.len());
+            buf.extend_from_slice(b"FDF1");
+            buf.push(0u8);
+            buf.push(0u8);
+            buf.extend_from_slice(&(width as u16).to_le_bytes());
+            buf.extend_from_slice(&(height as u16).to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(payload);
+            let _ = channel.send(tauri::ipc::InvokeResponseBody::Raw(buf));
+        }
     }
 }
 struct H264Gate {
@@ -2444,6 +2472,35 @@ impl windows_capture::capture::GraphicsCaptureApiHandler for WgcHandler {
         log("capture ended (source closed)");
         Ok(())
     }
+}
+
+fn start_keepalive_thread(app: AppHandle, gen: u64) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(100));
+            if !CAPTURING.load(std::sync::atomic::Ordering::SeqCst)
+                || CAPTURE_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen
+            {
+                return;
+            }
+            let cfg = config();
+            if !cfg.screen_share_keepalive {
+                continue;
+            }
+            let fps = cfg.screen_share_max_fps.clamp(5, 30) as u64;
+            let interval = Duration::from_millis(1000 / fps);
+            let snapshot = LAST_SENT.lock().ok().and_then(|g| {
+                g.as_ref()
+                    .filter(|(_, _, _, _, at)| at.elapsed() >= interval)
+                    .map(|(data, _, w, h, _)| (data.clone(), *w, *h))
+            });
+            if let Some((data, w, h)) = snapshot {
+                let mut seq = 0;
+                send_frame_keepalive(w, h, &data);
+                let _ = seq;
+            }
+        }
+    });
 }
 fn start_wgc_capture(app: AppHandle, monitor_index: usize) -> bool {
     use windows_capture::capture::GraphicsCaptureApiHandler;
