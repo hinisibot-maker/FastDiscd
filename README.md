@@ -74,7 +74,7 @@ The Electron client bundles Chromium and Node.js with every app. FastDiscd inste
 
 | State | Total memory |
 | --- | --- |
-| **Unfocused (working in another window)** | **~130–210 MB** (aggressive release every 5 s) |
+| **Unfocused (working in another window)** | **~100–210 MB** (aggressive release every 5 s) |
 | **Focused (normal use)** | **~386 MB** |
 | Reference: official Discord (Electron) | ~1,000–1,500 MB |
 
@@ -161,6 +161,12 @@ pnpm tauri build
  └─ fastdiscd.log  runtime log
 ```
 
+
+## Looking for testers
+
+FastDiscd is still in beta and I'm looking for people to help test it.
+If you try it, please report issues (crash, memory, PTT, drag & drop, installer) via GitHub Issues.
+Especially useful: reports on memory usage with many channels open, and on different GPUs (NVIDIA / Intel / AMD).
 ## Known limitations
 
 - Screen sharing is experimental and may not work depending on Discord's client-side detection

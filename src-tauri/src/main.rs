@@ -657,6 +657,7 @@ fn supervisor(window: WebviewWindow) {
     let mut low_since: Option<std::time::Instant> = None;
     let mut last_trim = std::time::Instant::now() - Duration::from_secs(3600);
     let mut last_pressure = std::time::Instant::now() - Duration::from_secs(3600);
+    let mut last_gc = std::time::Instant::now() - Duration::from_secs(3600);
 
     loop {
         std::thread::sleep(Duration::from_millis(1200));
@@ -676,6 +677,10 @@ fn supervisor(window: WebviewWindow) {
             if last_pressure.elapsed() > Duration::from_secs(5) {
                 send_memory_pressure(&window, "critical");
                 last_pressure = std::time::Instant::now();
+            }
+            if last_gc.elapsed() > Duration::from_secs(30) {
+                request_gc(&window);
+                last_gc = std::time::Instant::now();
             }
             if last_trim.elapsed() > Duration::from_secs(5) {
                 trim_webview_processes();
@@ -740,6 +745,17 @@ fn maybe_run_command(window: &WebviewWindow) {
 }
 
 
+
+/// 非フォーカス中に V8 ヒープの GC を要求して、以前開いたチャンネルの情報を解放させる
+fn request_gc(window: &WebviewWindow) {
+    let _ = window.with_webview(|webview| {
+        let controller = webview.controller();
+        let Ok(core) = (unsafe { controller.CoreWebView2() }) else {
+            return;
+        };
+        collect_garbage(&core);
+    });
+}
 /// Chromium に定期的なメモリ逼迫を通知してキャッシュを手放させる（挙動は穏やか）
 fn send_memory_pressure(window: &WebviewWindow, level: &str) {
     let level = HSTRING::from(level);
