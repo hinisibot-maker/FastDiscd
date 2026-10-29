@@ -879,6 +879,8 @@ fn screen_thumb(x: i32, y: i32, w: i32, h: i32, tw: i32, th: i32) -> String {
     }
 }
 
+windows_targets::link!("user32.dll" "system" fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> windows::core::BOOL);
+
 /// ウィンドウのサムネイル（PrintWindow）
 fn window_thumb(hwnd: isize, tw: i32, th: i32) -> String {
     use windows::Win32::Graphics::Gdi::*;
@@ -891,9 +893,11 @@ fn window_thumb(hwnd: isize, tw: i32, th: i32) -> String {
         let old = SelectObject(mem, bitmap.into());
         let _ = SetStretchBltMode(mem, HALFTONE);
         let h = HWND(hwnd as *mut core::ffi::c_void);
-        let src_dc = GetDC(Some(h));
-        let _ = BitBlt(mem, 0, 0, tw, th, Some(src_dc), 0, 0, SRCCOPY);
-        let _ = ReleaseDC(Some(h), src_dc);
+        if !PrintWindow(h, mem, 2).as_bool() {
+            let src_dc = GetDC(Some(h));
+            let _ = BitBlt(mem, 0, 0, tw, th, Some(src_dc), 0, 0, SRCCOPY);
+            let _ = ReleaseDC(Some(h), src_dc);
+        }
         let mut pixels = vec![0u8; (tw * th * 4) as usize];
         let mut info = BITMAPINFO::default();
         info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -966,6 +970,30 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, data: LPARAM) -> windows:
     if pid == std::process::id() { return windows::core::BOOL(1); }
     let len = GetWindowTextLengthW(hwnd);
     if len <= 0 { return windows::core::BOOL(1); }
+
+    // システム系・疑似ウィンドウを除外
+    let mut class_buf = [0u16; 256];
+    let cn = GetClassNameW(hwnd, &mut class_buf);
+    let class = String::from_utf16_lossy(&class_buf[..cn.max(0) as usize]);
+    const BLOCKED_CLASSES: &[&str] = &[
+        "Windows.UI.Core.CoreWindow",
+        "ApplicationFrameWindow",
+        "Shell_TrayWnd",
+        "Shell_SecondaryTrayWnd",
+        "Progman",
+        "WorkerW",
+        "MSCTFIME UI",
+        "Default IME",
+        "IME",
+        "GDI+ Window",
+        "Windows.UI.Composition.DesktopWindowContentBridge",
+    ];
+    if BLOCKED_CLASSES.contains(&class.as_str()) { return windows::core::BOOL(1); }
+    let ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+    if (ex & (WS_EX_TOOLWINDOW.0 as i32)) != 0 { return windows::core::BOOL(1); }
+    let mut cloaked = 0u32;
+    let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut _ as *mut _, 4);
+    if cloaked != 0 { return windows::core::BOOL(1); }
     let mut buf = vec![0u16; (len + 1) as usize];
     let n = GetWindowTextW(hwnd, &mut buf);
     let title = String::from_utf16_lossy(&buf[..n as usize]);
@@ -983,7 +1011,8 @@ fn show_source_picker(app: AppHandle) {
         Some(window) => {
             let _ = window.show();
             let _ = window.set_focus();
-            log("picker shown");
+            let visible = window.is_visible().unwrap_or(false);
+            log(&format!("picker shown visible={visible}"));
         }
         None => log("picker window missing"),
     }
@@ -1689,10 +1718,11 @@ use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA};
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, ShowWindow, SW_MAXIMIZE,
-    SW_MINIMIZE, SW_RESTORE,
+    EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowLongW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    IsZoomed, ShowWindow, GWL_EXSTYLE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, WS_EX_TOOLWINDOW,
 };
 
 
@@ -1909,7 +1939,13 @@ const SHARE_JS: &str = r##"
                 listening = true;
                 listenerReady = tauri.event.listen("fastdisc://frame", function (event) {
                     var img = new Image();
-                    img.onload = function () { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); };
+                    img.onload = function () {
+                    if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+                        canvas.width = img.naturalWidth;
+                        canvas.height = img.naturalHeight;
+                    }
+                    ctx.drawImage(img, 0, 0);
+                };
                     img.src = "data:image/jpeg;base64," + event.payload;
                 });
             }
