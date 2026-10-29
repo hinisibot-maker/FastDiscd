@@ -47,4 +47,5 @@ commands.allow = [
     "show_source_picker",
     "select_source",
     "selection_state",
+    "close_picker",
 ]

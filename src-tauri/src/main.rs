@@ -101,6 +101,7 @@ fn main() {
             show_source_picker,
             select_source,
             selection_state,
+            close_picker,
 
 
             get_autostart,
@@ -787,34 +788,27 @@ fn send_memory_pressure(window: &WebviewWindow, level: &str) {
 struct CaptureSource {
     id: String,
     name: String,
+    kind: String,
     x: i32,
     y: i32,
     width: i32,
     height: i32,
+    thumb: String,
 }
 
-#[tauri::command]
-fn list_sources() -> Vec<CaptureSource> {
+static SELECTED_WINDOW: std::sync::Mutex<Option<isize>> = std::sync::Mutex::new(None);
+
+fn encode_thumb(pixels: &[u8], w: i32, h: i32) -> String {
+    let rgb: Vec<u8> = pixels
+        .chunks_exact(4)
+        .flat_map(|p| [p[2], p[1], p[0]])
+        .collect();
     let mut out = Vec::new();
-    unsafe {
-        let mut monitors: Vec<HMONITOR> = Vec::new();
-        let _ = EnumDisplayMonitors(None::<HDC>, None::<*const RECT>, Some(enum_monitor_proc), LPARAM(&mut monitors as *mut _ as isize));
-        for (i, mon) in monitors.iter().enumerate() {
-            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-            if GetMonitorInfoW(*mon, &mut info).as_bool() {
-                let r = info.rcMonitor;
-                out.push(CaptureSource {
-                    id: format!("monitor:{i}"),
-                    name: format!("画面 {}", i + 1),
-                    x: r.left,
-                    y: r.top,
-                    width: r.right - r.left,
-                    height: r.bottom - r.top,
-                });
-            }
-        }
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 55);
+    if enc.encode(&rgb, w as u32, h as u32, image::ExtendedColorType::Rgb8).is_err() {
+        return String::new();
     }
-    out
+    base64::engine::general_purpose::STANDARD.encode(out)
 }
 
 unsafe extern "system" fn enum_monitor_proc(
@@ -828,6 +822,131 @@ unsafe extern "system" fn enum_monitor_proc(
     windows::core::BOOL(1)
 }
 
+/// GDI で指定矩形のサムネイルを作る（画面全体用）
+fn screen_thumb(x: i32, y: i32, w: i32, h: i32, tw: i32, th: i32) -> String {
+    use windows::Win32::Graphics::Gdi::*;
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() { return String::new(); }
+        let mem = CreateCompatibleDC(Some(screen));
+        let bitmap = CreateCompatibleBitmap(screen, tw, th);
+        let old = SelectObject(mem, bitmap.into());
+        let _ = SetStretchBltMode(mem, HALFTONE);
+        let _ = StretchBlt(mem, 0, 0, tw, th, Some(screen), x, y, w, h, SRCCOPY);
+        let mut pixels = vec![0u8; (tw * th * 4) as usize];
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = tw;
+        info.bmiHeader.biHeight = -th;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB.0;
+        let _ = GetDIBits(mem, bitmap, 0, th as u32, Some(pixels.as_mut_ptr().cast()), &mut info, DIB_RGB_COLORS);
+        let _ = SelectObject(mem, old);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(mem);
+        let _ = ReleaseDC(None, screen);
+        encode_thumb(&pixels, tw, th)
+    }
+}
+
+/// ウィンドウのサムネイル（PrintWindow）
+fn window_thumb(hwnd: isize, tw: i32, th: i32) -> String {
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::Foundation::HWND;
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() { return String::new(); }
+        let mem = CreateCompatibleDC(Some(screen));
+        let bitmap = CreateCompatibleBitmap(screen, tw, th);
+        let old = SelectObject(mem, bitmap.into());
+        let _ = SetStretchBltMode(mem, HALFTONE);
+        let h = HWND(hwnd as *mut core::ffi::c_void);
+        let src_dc = GetDC(Some(h));
+        let _ = BitBlt(mem, 0, 0, tw, th, Some(src_dc), 0, 0, SRCCOPY);
+        let _ = ReleaseDC(Some(h), src_dc);
+        let mut pixels = vec![0u8; (tw * th * 4) as usize];
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = tw;
+        info.bmiHeader.biHeight = -th;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB.0;
+        let _ = GetDIBits(mem, bitmap, 0, th as u32, Some(pixels.as_mut_ptr().cast()), &mut info, DIB_RGB_COLORS);
+        let _ = SelectObject(mem, old);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(mem);
+        let _ = ReleaseDC(None, screen);
+        encode_thumb(&pixels, tw, th)
+    }
+}
+
+#[tauri::command]
+fn list_sources() -> Vec<CaptureSource> {
+    let mut out = Vec::new();
+    unsafe {
+        let mut monitors: Vec<HMONITOR> = Vec::new();
+        let _ = EnumDisplayMonitors(None::<HDC>, None::<*const RECT>, Some(enum_monitor_proc), LPARAM(&mut monitors as *mut _ as isize));
+        for (i, mon) in monitors.iter().enumerate() {
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            if GetMonitorInfoW(*mon, &mut info).as_bool() {
+                let r = info.rcMonitor;
+                let w = r.right - r.left;
+                let h = r.bottom - r.top;
+                out.push(CaptureSource {
+                    id: format!("monitor:{i}"),
+                    name: format!("画面 {}", i + 1),
+                    kind: "screen".into(),
+                    x: r.left,
+                    y: r.top,
+                    width: w,
+                    height: h,
+                    thumb: screen_thumb(r.left, r.top, w, h, 160, 90),
+                });
+            }
+        }
+
+        let mut windows: Vec<(isize, String, RECT)> = Vec::new();
+        let _ = EnumWindows(Some(enum_window_proc), LPARAM(&mut windows as *mut _ as isize));
+        for (hwnd, title, rect) in windows {
+            let w = rect.right - rect.left;
+            let h = rect.bottom - rect.top;
+            if w <= 0 || h <= 0 { continue; }
+            out.push(CaptureSource {
+                id: format!("window:{hwnd}"),
+                name: title,
+                kind: "window".into(),
+                x: rect.left,
+                y: rect.top,
+                width: w,
+                height: h,
+                thumb: window_thumb(hwnd, 160, 90),
+            });
+        }
+    }
+    out
+}
+
+unsafe extern "system" fn enum_window_proc(hwnd: HWND, data: LPARAM) -> windows::core::BOOL {
+    let list = &mut *(data.0 as *mut Vec<(isize, String, RECT)>);
+    if !IsWindowVisible(hwnd).as_bool() { return windows::core::BOOL(1); }
+    if IsIconic(hwnd).as_bool() { return windows::core::BOOL(1); }
+    let mut pid = 0u32;
+    let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == std::process::id() { return windows::core::BOOL(1); }
+    let len = GetWindowTextLengthW(hwnd);
+    if len <= 0 { return windows::core::BOOL(1); }
+    let mut buf = vec![0u16; (len + 1) as usize];
+    let n = GetWindowTextW(hwnd, &mut buf);
+    let title = String::from_utf16_lossy(&buf[..n as usize]);
+    if title.trim().is_empty() { return windows::core::BOOL(1); }
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() { return windows::core::BOOL(1); }
+    list.push((hwnd.0 as isize, title, rect));
+    windows::core::BOOL(1)
+}
+
 #[tauri::command]
 fn show_source_picker(app: AppHandle) {
     if let Some(window) = app.get_webview_window("picker") {
@@ -837,8 +956,8 @@ fn show_source_picker(app: AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(&app, "picker", WebviewUrl::App("picker.html".into()))
         .title("配信する画面を選択")
-        .inner_size(440.0, 460.0)
-        .resizable(false)
+        .inner_size(720.0, 620.0)
+        .resizable(true)
         .maximizable(false)
         .minimizable(false)
         .background_color(tauri::utils::config::Color(30, 31, 34, 255))
@@ -847,13 +966,22 @@ fn show_source_picker(app: AppHandle) {
 }
 
 #[tauri::command]
+fn close_picker(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("picker") {
+        let _ = window.close();
+    }
+}
+
+#[tauri::command]
 fn selection_state() -> bool {
     SELECTED_SOURCE.lock().map(|s| s.is_some()).unwrap_or(false)
 }
 
 #[tauri::command]
-fn select_source(app: AppHandle, id: String, x: i32, y: i32, width: i32, height: i32) {
+fn select_source(app: AppHandle, id: String, kind: String, x: i32, y: i32, width: i32, height: i32) {
     *SELECTED_SOURCE.lock().unwrap() = Some((x, y, width, height));
+    let hwnd = id.strip_prefix("window:").and_then(|v| v.parse::<isize>().ok());
+    *SELECTED_WINDOW.lock().unwrap() = hwnd;
     log(&format!("capture source selected: {id}"));
     if let Some(window) = app.get_webview_window("picker") {
         let _ = window.close();
@@ -1247,14 +1375,35 @@ fn grab_screen_jpeg(out_w: i32, out_h: i32) -> Option<Vec<u8>> {
         let bitmap = CreateCompatibleBitmap(screen, out_w, out_h);
         let old = SelectObject(mem, bitmap.into());
         let _ = SetStretchBltMode(mem, HALFTONE);
-        let (sx, sy, sw, sh) = {
-            let sel = SELECTED_SOURCE.lock().unwrap();
-            match *sel {
-                Some((x, y, w, h)) => (x, y, w, h),
-                None => (0, 0, width, height),
-            }
+        let selected_window = *SELECTED_WINDOW.lock().unwrap();
+        let ok = if let Some(hwnd) = selected_window {
+            use windows::Win32::Foundation::HWND;
+            let (sw, sh) = {
+                let sel = SELECTED_SOURCE.lock().unwrap();
+                match *sel { Some((_, _, w, h)) => (w, h), None => (width, height) }
+            };
+            let src_bmp = CreateCompatibleBitmap(screen, sw, sh);
+            let src_mem = CreateCompatibleDC(Some(screen));
+            let old_src = SelectObject(src_mem, src_bmp.into());
+            let h = HWND(hwnd as *mut core::ffi::c_void);
+            let src_dc = GetDC(Some(h));
+            let printed = BitBlt(src_mem, 0, 0, sw, sh, Some(src_dc), 0, 0, SRCCOPY).is_ok();
+            let _ = ReleaseDC(Some(h), src_dc);
+            let ok = printed && StretchBlt(mem, 0, 0, out_w, out_h, Some(src_mem), 0, 0, sw, sh, SRCCOPY).as_bool();
+            let _ = SelectObject(src_mem, old_src);
+            let _ = DeleteObject(src_bmp.into());
+            let _ = DeleteDC(src_mem);
+            ok
+        } else {
+            let (sx, sy, sw, sh) = {
+                let sel = SELECTED_SOURCE.lock().unwrap();
+                match *sel {
+                    Some((x, y, w, h)) => (x, y, w, h),
+                    None => (0, 0, width, height),
+                }
+            };
+            StretchBlt(mem, 0, 0, out_w, out_h, Some(screen), sx, sy, sw, sh, SRCCOPY).as_bool()
         };
-        let ok = StretchBlt(mem, 0, 0, out_w, out_h, Some(screen), sx, sy, sw, sh, SRCCOPY).as_bool();
 
         let mut pixels = vec![0u8; (out_w * out_h * 4) as usize];
         let mut info = BITMAPINFO::default();
@@ -1353,10 +1502,12 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA};
-use windows::Win32::Foundation::{LPARAM, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, IsIconic, IsZoomed, ShowWindow, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+    EnumWindows, GetForegroundWindow, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, ShowWindow, SW_MAXIMIZE,
+    SW_MINIMIZE, SW_RESTORE,
 };
 
 
